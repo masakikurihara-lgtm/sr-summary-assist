@@ -436,10 +436,10 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         final_columns = [col for col in column_order if col in results_df.columns]
         results_df = results_df[final_columns]
 
-        # Excelの自動日付変換対策（"2025/10" → "Oct-25" になるのを防止）
-        results_df["配信月"] = results_df["配信月"].astype(str).apply(lambda x: f"'{x}")
-        results_df["支払月"] = results_df["支払月"].astype(str).apply(lambda x: f"'{x}")
-
+        # --- Excelの日付自動変換対策（"2025/10" をそのまま表示）---
+        results_df["配信月"] = results_df["配信月"].astype(str).apply(lambda x: f'="{x}"')
+        results_df["支払月"] = results_df["支払月"].astype(str).apply(lambda x: f'="{x}"')
+        
     st.success("✅ 全てのデータ処理が完了しました！")
 
     # 4. 結果の表示とCSVダウンロード
