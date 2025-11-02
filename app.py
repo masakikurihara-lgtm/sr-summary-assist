@@ -10,11 +10,8 @@ st.set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整�
 
 
 # --- 定数（URL） ---
-# ライブKPIデータ（配信有無確認用）のベースURL
 KPI_DATA_BASE_URL = "https://mksoul-pro.com/showroom/csv/{year}-{month:02d}_all_all.csv"
-# 管理ライバーのルームID一覧URL
 LIVER_LIST_URL = "https://mksoul-pro.com/showroom/file/m-liver-list.csv"
-# ルーム名一覧URL
 ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
 
 
@@ -40,9 +37,7 @@ def get_processed_months():
     for i in range(12): 
         display_str = f"{current_date.year}年{current_date.month:02d}月分"
         value_str = f"{current_date.year}-{current_date.month:02d}"
-        
         processed_months.append((display_str, value_str))
-        
         current_date = current_date - relativedelta(months=1)
             
     return processed_months
@@ -57,7 +52,7 @@ def main():
     display_options = [opt[0] for opt in month_options]
     value_options = [opt[1] for opt in month_options]
     
-    # --- レイアウト修正: プルダウンのみをシンプルに表示 ---
+    # プルダウンのみをシンプルに表示
     selected_display_month = st.selectbox(
         "処理する**配信月**を選択してください:",
         options=display_options,
@@ -95,25 +90,25 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         
         # 2. データの読み込み
         
-        # 2.1. 管理ライバーリストの読み込み (ルームID一覧)
+        # 2.1. 管理ライバーリストの読み込み (m-liver-list.csv)
         st.subheader("管理ライバーリストの読み込み")
         liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
         if liver_df is None: return
         
-        # 1列目のルームIDを取得し、文字列に変換
+        # ✅ 1列目 (.iloc[:, 0]) のルームIDを取得し、文字列に変換
         if liver_df.shape[1] > 0:
             liver_ids = liver_df.iloc[:, 0].astype(str).str.strip().tolist()
-            st.success(f"管理ライバーのルームIDリストを読み込みました。件数: **{len(liver_ids)}**")
+            st.success(f"管理ライバーのルームIDリスト（1列目）を読み込みました。件数: **{len(liver_ids)}**")
         else:
             st.error("管理ライバーリストCSVにデータがありません。")
             return
         
-        # 2.2. ルーム名リストの読み込みとマッピング
+        # 2.2. ルーム名リストの読み込みとマッピング (room_list.csv)
         st.subheader("ルーム名リストの読み込みとマッピング")
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト")
         if room_list_df is None: return
         
-        # === 最終修正点：1列目ID（キー）と2列目ルーム名（値）でマッピング ===
+        # ✅ 1列目ID（キー）と2列目ルーム名（値）でマッピング
         if room_list_df.shape[1] >= 2:
             
             # 1列目 (ID) を文字列に変換し、インデックスとして設定
@@ -121,20 +116,20 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             
             # 2列目 (ルーム名) のデータを値として取得
             # 1列目をキー(ID)、2列目(インデックス1)を値(ルーム名)として辞書を作成
-            room_name_map = room_list_df.set_index(room_list_df.columns[0]).iloc[:, 1].to_dict()
-            st.success(f"ルーム名マッピングを作成しました。マッピング件数: **{len(room_name_map)}** (2列目のデータを使用)")
+            room_name_map = room_list_df.set_index(room_list_df.columns[0]).iloc[:, 1].astype(str).str.strip().to_dict()
+            st.success(f"ルーム名マッピングを作成しました。マッピング件数: **{len(room_name_map)}** (**2列目のルーム名を使用**)")
         else:
             st.error("ルーム名リストCSVに必要な列（1列目:ID, 2列目:ルーム名）が見つかりません。処理を中断します。")
             return
             
-        # 2.3. KPIデータ（配信有無）の読み込み
+        # 2.3. KPIデータ（配信有無）の読み込み (YYYY-MM_all_all.csv)
         st.subheader(f"{year}年{month:02d}月分のKPIデータの読み込み")
         kpi_url = KPI_DATA_BASE_URL.format(year=year, month=month)
         kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ")
         if kpi_df is None: return
 
+        # ✅ 2列目（ルームID）のデータを取得し、Setに変換
         if kpi_df.shape[1] > 1:
-            # 2列目（ルームID）のデータを取得し、Setに変換
             kpi_room_ids = set(kpi_df.iloc[:, 1].astype(str).str.strip().tolist())
             st.success(f"配信があったルーム件数: **{len(kpi_room_ids)}** (KPIデータは2列目のIDを使用)")
         else:
@@ -147,6 +142,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         results = []
         
         for room_id in liver_ids:
+            # 2列目のルーム名を取得
             room_name = room_name_map.get(room_id, "ルーム名不明") 
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
                 
@@ -179,7 +175,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     )
     
     st.markdown("---")
-    st.info("💡 **次のステップについて**\n\nこの修正で、レイアウトとルーム名の紐づけが正しく行われていることをご確認ください。次は**売上データ**を取り込み、残りの目標項目を完成させましょう。")
+    st.info("💡 **次のステップについて**\n\nこの修正で、ルーム名（2列目）の紐づけが正しく行われているはずです。確認後、次は**売上データ**を取り込み、残りの目標項目を完成させましょう。")
 
 
 if __name__ == "__main__":
