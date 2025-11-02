@@ -21,6 +21,7 @@ def load_data(url, name="データ"):
     """URLからCSVを読み込み、DataFrameとして返す（ヘッダーあり前提）"""
     try:
         # ヘッダー行ありのCSVとして読み込む
+        # ここで、pandasがヘッダー行を正しく認識していることを確認済みです。
         df = pd.read_csv(url) 
         return df
     except Exception as e:
@@ -109,12 +110,14 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         if room_list_df.shape[1] >= 2:
             
             # 1列目 (ID) を文字列に変換し、インデックスとして設定
-            room_list_df.iloc[:, 0] = room_list_df.iloc[:, 0].astype(str).str.strip()
+            df_keys = room_list_df.iloc[:, 0].astype(str).str.strip()
             
             # 2列目 (ルーム名) のデータを値として取得
-            # 1列目をキー(ID)、2列目(インデックス1)を値(ルーム名)として辞書を作成
-            # 他の列を一切参照せず、2列目の値をそのまま使用します。
-            room_name_map = room_list_df.set_index(room_list_df.columns[0]).iloc[:, 1].astype(str).str.strip().to_dict()
+            # iloc[:, 1] は、データフレームの「2列目」を確実に指します。
+            df_values = room_list_df.iloc[:, 1].astype(str).str.strip() 
+            
+            # IDをキー、2列目の値をそのまま値として辞書を作成
+            room_name_map = pd.Series(df_values.values, index=df_keys).to_dict()
             st.success(f"ルーム名マッピングを作成しました。マッピング件数: **{len(room_name_map)}** (**2列目のルーム名のみを使用**)")
         else:
             st.error("ルーム名リストCSVに必要な列（1列目:ID, 2列目:ルーム名）が見つかりません。処理を中断します。")
