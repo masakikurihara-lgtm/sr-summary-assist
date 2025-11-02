@@ -21,9 +21,9 @@ ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
 ## データの準備・読み込み関数
 @st.cache_data
 def load_data(url, name="データ"):
-    """URLからCSVを読み込み、DataFrameとして返す"""
+    """URLからCSVを読み込み、DataFrameとして返す（ヘッダーあり前提）"""
     try:
-        # === 修正点: header=Noneを削除し、ヘッダー行を正しく認識させる ===
+        # ヘッダー行ありのCSVとして読み込む
         df = pd.read_csv(url) 
         return df
     except Exception as e:
@@ -32,7 +32,7 @@ def load_data(url, name="データ"):
 
 @st.cache_data
 def get_processed_months():
-    # ... (変更なし) ...
+    """プルダウンに表示する処理月リストを生成する"""
     today = datetime.date.today()
     current_date = today - relativedelta(months=1)
     processed_months = []
@@ -57,15 +57,14 @@ def main():
     display_options = [opt[0] for opt in month_options]
     value_options = [opt[1] for opt in month_options]
     
-    col_select, col_info, col_button = st.columns([1, 2, 2])
+    # --- レイアウト修正: プルダウンのみをシンプルに表示 ---
+    selected_display_month = st.selectbox(
+        "処理する**配信月**を選択してください:",
+        options=display_options,
+        index=0
+    )
     
-    with col_select:
-        selected_display_month = st.selectbox(
-            "処理する**配信月**を選択してください:",
-            options=display_options,
-            index=0
-        )
-        
+    # 選択月情報の計算（データ処理のために内部で保持）
     try:
         selected_index = display_options.index(selected_display_month)
         selected_value_month = value_options[selected_index]
@@ -80,17 +79,12 @@ def main():
         st.warning("有効な処理月が選択されていません。")
         return
     
-    with col_info:
-        st.markdown(f"**配信月 (出力形式):** {delivery_month_str}")
-    
-    with col_button:
-        st.markdown(f"**想定支払月:** {payment_month_str}")
-
+    # 処理開始ボタン
     st.markdown("---")
     if st.button("🚀 データ処理を開始する", type="primary"):
         process_data(year, month, delivery_month_str, payment_month_str)
     else:
-        st.info("処理を開始するには上記のボタンを押してください。")
+        st.info(f"選択された配信月: **{selected_display_month}**。処理を開始するには上記のボタンを押してください。")
     st.markdown("---")
 
 
@@ -106,7 +100,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
         if liver_df is None: return
         
-        # === 修正点：ヘッダー行があるので、iloc[:, 0]はルームIDの列。型変換を維持。 ===
+        # 1列目のルームIDを取得し、文字列に変換
         if liver_df.shape[1] > 0:
             liver_ids = liver_df.iloc[:, 0].astype(str).str.strip().tolist()
             st.success(f"管理ライバーのルームIDリストを読み込みました。件数: **{len(liver_ids)}**")
@@ -119,15 +113,16 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト")
         if room_list_df is None: return
         
+        # === 最終修正点：1列目ID（キー）と2列目ルーム名（値）でマッピング ===
         if room_list_df.shape[1] >= 2:
-            # === 修正点：ヘッダー行があるので、iloc[:, 0]とiloc[:, 1]を使用。型変換を維持。 ===
             
             # 1列目 (ID) を文字列に変換し、インデックスとして設定
             room_list_df.iloc[:, 0] = room_list_df.iloc[:, 0].astype(str).str.strip()
             
-            # 1列目をキー(ID)、2列目を値(ルーム名)として辞書を作成 (iloc[:, 1]は2列目のデータ)
+            # 2列目 (ルーム名) のデータを値として取得
+            # 1列目をキー(ID)、2列目(インデックス1)を値(ルーム名)として辞書を作成
             room_name_map = room_list_df.set_index(room_list_df.columns[0]).iloc[:, 1].to_dict()
-            st.success(f"ルーム名マッピングを作成しました。マッピング件数: **{len(room_name_map)}**")
+            st.success(f"ルーム名マッピングを作成しました。マッピング件数: **{len(room_name_map)}** (2列目のデータを使用)")
         else:
             st.error("ルーム名リストCSVに必要な列（1列目:ID, 2列目:ルーム名）が見つかりません。処理を中断します。")
             return
@@ -139,10 +134,9 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         if kpi_df is None: return
 
         if kpi_df.shape[1] > 1:
-            # === 修正点：ヘッダー行があるので、iloc[:, 1]はルームIDの列。型変換を維持。 ===
-            # 2列目のデータを取得し、Setに変換
+            # 2列目（ルームID）のデータを取得し、Setに変換
             kpi_room_ids = set(kpi_df.iloc[:, 1].astype(str).str.strip().tolist())
-            st.success(f"配信があったルーム件数: **{len(kpi_room_ids)}**")
+            st.success(f"配信があったルーム件数: **{len(kpi_room_ids)}** (KPIデータは2列目のIDを使用)")
         else:
             st.error("KPIデータCSVに配信ルームID（2列目）が見つかりません。")
             return
@@ -153,7 +147,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         results = []
         
         for room_id in liver_ids:
-            room_name = room_name_map.get(room_id, "ルーム名不明")
+            room_name = room_name_map.get(room_id, "ルーム名不明") 
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
                 
             results.append({
@@ -185,7 +179,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     )
     
     st.markdown("---")
-    st.info("💡 **次のステップについて**\n\n**この修正でルーム名が正しく表示されるはずです。** 次は売上データを取り込み、残りの目標項目を完成させましょう。")
+    st.info("💡 **次のステップについて**\n\nこの修正で、レイアウトとルーム名の紐づけが正しく行われていることをご確認ください。次は**売上データ**を取り込み、残りの目標項目を完成させましょう。")
 
 
 if __name__ == "__main__":
