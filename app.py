@@ -5,7 +5,6 @@ import datetime
 from dateutil.relativedelta import relativedelta
 
 
-
 # --- ページ設定 ---
 # 【修正箇所】: st.set_set_page_config を st.set_page_config に修正
 st.set_page_config(layout="wide", page_title="SHOWROOM 月初サマリー作成ツール")
@@ -23,7 +22,7 @@ TIME_CHARGE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/show_rank_tim
 
 
 ## データの準備・読み込み関数
-# 【削除】: @st.cache_data を削除しました。これにより、URLが変わらない場合でも毎回データを再取得します。
+# @st.cache_data は削除済み
 def load_data(url, name="データ", header='infer'):
     """URLからCSVを読み込み、DataFrameとして返す（文字化け対策のためUTF-8, Shift-JISを試行）"""
     try:
@@ -42,7 +41,7 @@ def load_data(url, name="データ", header='infer'):
         st.error(f"{name}の読み込みに失敗しました: {url}\nエラー: {e}")
         return None
 
-# 【削除】: @st.cache_data を削除しました。これにより、アプリケーションが再実行されるたびに月リストが再生成されます。
+# @st.cache_data は削除済み
 def get_processed_months():
     """プルダウンに表示する処理月リストを生成する"""
     today = datetime.date.today()
@@ -246,8 +245,7 @@ def main():
         year, month = map(int, selected_value_month.split('-'))
         
         delivery_month_str = f"{year}/{month:02d}"
-        delivery_date = datetime.date(year, month, 1)
-        payment_date = delivery_date + relativedelta(months=2)
+        payment_date = datetime.date(year, month, 1) + relativedelta(months=2)
         payment_month_str = f"{payment_date.year}/{payment_date.month:02d}"
         
     except:
@@ -303,8 +301,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             return
             
         # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用 
-        # **【新規追加・修正】** 管理対象判定のためにも使用
-        #st.subheader("ルームIDとアカウントIDの紐づけ")
+        #st.subheader("ルームIDとアカウントIDの紐づけと管理対象判定リストの作成")
         st.markdown(f"##### ルームIDとアカウントIDの紐づけと管理対象判定リストの作成")
         # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
@@ -320,7 +317,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         else:
             st.error("ルーム名リストCSVにアカウントID（4列目）が見つかりません。売上分配額の紐づけをスキップします。")
 
-        # **【新規追加】** ROOM_LIST_URLの1列目（ルームID）のセットを作成
+        # ROOM_LIST_URLの1列目（ルームID）のセットを作成
         if room_list_df.shape[1] >= 1:
             room_list_ids = set(room_list_df.iloc[:, 0].astype(str).str.strip().tolist())
             st.success(f"room_list.csv のルームIDリストを読み込みました。件数: **{len(room_list_ids)}**")
@@ -421,7 +418,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         for room_id in liver_ids:
             liver_alias = liver_alias_map.get(room_id, "愛称不明") 
             
-            # **【新規追加】** 管理対象判定
+            # 管理対象判定
             # LIVER_LIST_URLに存在し、ROOM_LIST_URLに存在しない場合「外」
             is_managed = "外" if room_id not in room_list_ids else ""
             
@@ -443,21 +440,15 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             results.append({
                 "ルームID": room_id,
                 "ルーム名": liver_alias,
-                # **【新規追加】** 管理対象
                 "管理対象": is_managed,
                 "配信有無": has_stream,
                 "配信月": delivery_month_str,
                 "支払月": payment_month_str,
-                # 修正箇所: ルーム売上分配額 => R分配額
                 "R分配額": sales_amount, 
                 "個別ランク": individual_rank,
-                # 修正箇所: ルーム売上支払想定額 => R支払想定額
                 "R支払想定額": payment_estimate, 
-                # 修正箇所: プレミアムライブ分配額 => PL分配額
                 "PL分配額": paid_live_amount, 
-                # 修正箇所: プレミアムライブ支払想定額 => PL支払想定額
                 "PL支払想定額": paid_live_payment_estimate, 
-                # 修正箇所: タイムチャージ支払想定額 => TC支払想定額
                 "TC支払想定額": time_charge_payment_estimate, 
             })
 
@@ -467,30 +458,31 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         column_order = [
             "ルームID",
             "ルーム名",
-            # **【新規追加】** 管理対象
             "管理対象",
             "配信有無",
             "配信月",
             "支払月",
-            # 修正箇所: ルーム売上分配額 => R分配額
             "R分配額", 
             "個別ランク", 
-            # 修正箇所: ルーム売上支払想定額 => R支払想定額
             "R支払想定額", 
-            # 修正箇所: プレミアムライブ分配額 => PL分配額
             "PL分配額", 
-            # 修正箇所: プレミアムライブ支払想定額 => PL支払想定額
             "PL支払想定額", 
-            # 修正箇所: タイムチャージ支払想定額 => TC支払想定額
             "TC支払想定額", 
         ]
         
         final_columns = [col for col in column_order if col in results_df.columns]
         results_df = results_df[final_columns]
 
-        # --- Excelの日付自動変換対策（"2025/10" をそのまま表示）---
-        results_df["配信月"] = results_df["配信月"].astype(str).apply(lambda x: f'="{x}"')
-        results_df["支払月"] = results_df["支払月"].astype(str).apply(lambda x: f'="{x}"')
+        # --- 【修正 1/2】Excelの日付自動変換対策（="2025/10" を含むデータ）を results_df に適用 ---
+        # CSVダウンロード用データはExcel対策を維持
+        results_df_csv = results_df.copy()
+        results_df_csv["配信月"] = results_df_csv["配信月"].astype(str).apply(lambda x: f'="{x}"')
+        results_df_csv["支払月"] = results_df_csv["支払月"].astype(str).apply(lambda x: f'="{x}"')
+
+        # --- 【修正 2/2】画面表示用データを作成し、Excel対策表記を解除 ---
+        display_df = results_df.copy()
+        # 画面表示用のデータをExcel対策表記から解除
+        # （例: "2025/10" が含まれているため、そのままの文字列として利用）
         
     st.success("✅ 全てのデータ処理が完了しました！")
 
@@ -500,7 +492,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     
     # 画面表示用のヘッダーを「ライバー愛称」に変更
     # NOTE: DataFrameの表示時にも列名を変更する
-    display_df = results_df.rename(columns={
+    # 【変更点】display_df を使用
+    display_df = display_df.rename(columns={
         "ルーム名": "ライバー愛称",
         "R分配額": "R分配額",
         "R支払想定額": "R支払想定額",
@@ -509,14 +502,15 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         "TC支払想定額": "TC支払想定額"
     })
     
-    # **【修正箇所】** st.dataframeに hide_index=True を追加してインデックスを非表示にする
+    # st.dataframeに hide_index=True を追加してインデックスを非表示にする
     st.dataframe(display_df, use_container_width=True, hide_index=True) 
     
     #st.subheader("CSVダウンロード")
     st.markdown(f"##### CSVダウンロード")
 
     # CSV出力はBOM付きUTF-8（Excel対応）
-    csv_bytes = results_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+    # 【変更点】results_df_csv を使用
+    csv_bytes = results_df_csv.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
     st.download_button(
         label="📥 結果をCSVダウンロード",
