@@ -56,6 +56,16 @@ def get_processed_months():
             
     return processed_months
 
+# --- 【新規追加】チェックボックスのリセット関数 ---
+def reset_checks():
+    """
+    処理月が変更された際にチェックボックスの状態をリセットする
+    """
+    st.session_state.check1 = False
+    st.session_state.check2 = False
+    st.session_state.check3 = False
+    st.session_state.check4 = False
+
 
 # --- 個別ランク判定関数 ---
 def get_individual_rank(sales_amount_str):
@@ -233,16 +243,21 @@ def main():
     display_options = [opt[0] for opt in month_options]
     value_options = [opt[1] for opt in month_options]
     
+    # 【修正 1/2】 on_changeコールバックに関数（reset_checks）を指定
     selected_display_month = st.selectbox(
         "処理する**配信月**を選択してください:",
         options=display_options,
-        index=0
+        index=0,
+        on_change=reset_checks # 処理月が変更されたらチェックをリセット
     )
     
     try:
         selected_index = display_options.index(selected_display_month)
         selected_value_month = value_options[selected_index]
         year, month = map(int, selected_value_month.split('-'))
+        
+        # 表示用の "2025年10月" の文字列を作成
+        display_month_text = f"{year}年{month:02d}月"
         
         delivery_month_str = f"{year}/{month:02d}"
         payment_date = datetime.date(year, month, 1) + relativedelta(months=2)
@@ -257,7 +272,7 @@ def main():
     # --- 【新規追加】データ更新チェック項目 ---
     st.markdown("#### 2. データ更新状況のチェック（処理開始の必須条件）")
     
-    # チェックボックスの状態をセッションステートに保持
+    # チェックボックスの状態をセッションステートに保持（on_changeでリセットされる）
     if 'check1' not in st.session_state:
         st.session_state.check1 = False
     if 'check2' not in st.session_state:
@@ -271,7 +286,9 @@ def main():
     st.markdown("以下のファイルが**最新の状態**であることを確認してください。")
     check1 = st.checkbox(f"① 管理ライバーリスト（`{LIVER_LIST_URL.split('/')[-1]}`）が最新状態か", key='check1')
     check2 = st.checkbox(f"② ルームリスト（`{ROOM_LIST_URL.split('/')[-1]}`）が最新状態か", key='check2')
-    check3 = st.checkbox(f"③ 処理月（{selected_display_month}分）のKPIデータが最新状態か", key='check3')
+    
+    # 【修正 2/2】 チェック項目③のテキストから「分」を削除
+    check3 = st.checkbox(f"③ 処理月（{display_month_text}）のKPIデータが最新状態か", key='check3')
     
     # 複数の売上ファイルをまとめてチェック
     sales_file_names = [
@@ -279,7 +296,8 @@ def main():
         PAID_LIVE_URL.split('/')[-1],
         TIME_CHARGE_URL.split('/')[-1]
     ]
-    check4 = st.checkbox(f"④ 処理月（{selected_display_month}分）の各種売上データが最新状態か (ファイル例: {sales_file_names[0]} 他)", key='check4')
+    # 【修正 2/2】 チェック項目④のテキストから「分」を削除
+    check4 = st.checkbox(f"④ 処理月（{display_month_text}）の各種売上データが最新状態か (ファイル例: {sales_file_names[0]} 他)", key='check4')
 
     # 全てのチェックボックスがTrueであるかを確認
     all_checked = check1 and check2 and check3 and check4
@@ -293,7 +311,8 @@ def main():
     elif not all_checked:
         st.warning("処理を開始するには、上記の**全てのデータチェック項目にチェック**を入れてください。")
     else:
-        st.info(f"選択された配信月: **{selected_display_month}**。処理を開始するには上記のボタンを押してください。")
+        # 【修正 2/2】 表示テキストから「分」を削除した display_month_text を使用
+        st.info(f"選択された配信月: **{display_month_text}分**。処理を開始するには上記のボタンを押してください。")
     
     st.markdown("---")
 
@@ -500,7 +519,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             "配信月",
             "支払月",
             "R分配額", 
-            "個別ランク", 
+            "個別ランク",
             "R支払想定額", 
             "PL分配額", 
             "PL支払想定額", 
