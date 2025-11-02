@@ -5,7 +5,9 @@ import datetime
 from dateutil.relativedelta import relativedelta
 
 
+
 # --- ページ設定 ---
+# 【修正箇所】: st.set_set_page_config を st.set_page_config に修正
 st.set_page_config(layout="wide", page_title="SHOWROOM 月初サマリー作成ツール")
 
 
@@ -267,70 +269,54 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         # --- 2. データの読み込みとマッピング ---
         
         # 2.1. 管理ライバーリストの読み込み (m-liver-list.csv)
-        st.markdown(f"##### 管理ライバーリストの読み込みと愛称・アカウントIDマッピングの作成")
-        # ヘッダーあり(infer)で読み込み、1列目をルームID、2列目を愛称、3列目をアカウントIDとして使用
-        liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト", header='infer') 
+        #st.subheader("管理ライバーリストの読み込みと愛称マッピングの作成")
+        st.markdown(f"##### 管理ライバーリストの読み込みと愛称マッピングの作成")
+        liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
         if liver_df is None: return
         
-        # 1列目をルームID、2列目を愛称、3列目をアカウントIDとして取得
-        if liver_df.shape[1] >= 3:
-            # 1列目: ルームID (表示に使用/管理対象判定の比較元ID)
-            liver_ids = liver_df.iloc[:, 0].astype(str).str.strip().tolist()
-            # ルームID -> 愛称 マップ
-            liver_alias_map = pd.Series(liver_df.iloc[:, 1].astype(str).str.strip().values, index=liver_df.iloc[:, 0].astype(str).str.strip()).to_dict()
-            # ルームID -> アカウントID マップ (売上紐付けに使用)
-            room_id_to_account_id_map = pd.Series(liver_df.iloc[:, 2].astype(str).str.strip().values, index=liver_df.iloc[:, 0].astype(str).str.strip()).to_dict()
-            st.success(f"管理ライバーのルームIDリスト、愛称、アカウントID（3列目）を読み込みました。件数: **{len(liver_ids)}**")
+        if liver_df.shape[1] >= 2:
+            df_keys = liver_df.iloc[:, 0].astype(str).str.strip()
+            df_values = liver_df.iloc[:, 1].astype(str).str.strip() 
+            liver_alias_map = pd.Series(df_values.values, index=df_keys).to_dict()
+            liver_ids = df_keys.tolist()
+            st.success(f"管理ライバーのルームIDリスト（1列目）と愛称（2列目）を読み込みました。件数: **{len(liver_ids)}**")
         else:
-            st.error("管理ライバーリストCSVにデータ（1列目:ID, 2列目:愛称, 3列目:アカウントID）が見つかりません。")
+            st.error("管理ライバーリストCSVにデータ（1列目:ID, 2列目:愛称）が見つかりません。")
             return
         
         # 2.2. KPIデータ（配信有無）の読み込み (YYYY-MM_all_all.csv)
+        #st.subheader(f"{year}年{month:02d}月分のKPIデータの読み込み")
         st.markdown(f"##### {year}年{month:02d}月分のKPIデータの読み込み")
         kpi_url = KPI_DATA_BASE_URL.format(year=year, month=month)
-        # ヘッダーなし(None)で読み込み
-        kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ", header=None) 
+        kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ")
         if kpi_df is None: return
 
         if kpi_df.shape[1] > 1:
-            # 2列目 (インデックス1) がルームID
             kpi_room_ids = set(kpi_df.iloc[:, 1].astype(str).str.strip().tolist())
             st.success(f"配信があったルーム件数: **{len(kpi_room_ids)}** (KPIデータは2列目のIDを使用)")
         else:
             st.error("KPIデータCSVに配信ルームID（2列目）が見つかりません。")
             return
             
-        # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけと管理対象判定用
-        st.markdown(f"##### ルームIDとアカウントIDの紐づけおよび管理対象アカウントIDの抽出")
-        # ヘッダーあり(infer)で読み込み。1列目がルームID、4列目がアカウントID
+        # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用
+        #st.subheader("ルームIDとアカウントIDの紐づけ")
+        st.markdown(f"##### ルームIDとアカウントIDの紐づけ")
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
         if room_list_df is None: return
 
-        room_id_to_account_id_map_for_sales = {}
-        # 【修正】管理対象判定用に、room_list.csv の1列目（ルームID）のセットを作成
-        room_list_room_ids = set() 
-        
         if room_list_df.shape[1] >= 4:
-            # 4列目: アカウントID (キー) - 売上紐づけ用
             keys_series = room_list_df.iloc[:, 3].astype(str).str.strip()
-            # 1列目: ルームID (値/管理対象判定に使用)
             values_series = room_list_df.iloc[:, 0].astype(str).str.strip()
-            
-            # 【ルーム売上紐づけ用】 アカウントID -> ルームID マップを作成 (変更なし)
-            account_id_to_room_id_map_for_sales = pd.Series(values_series.values, index=keys_series).to_dict()
-
-            # 【管理対象判定用 - 修正箇所】 room_list.csv に存在する全てのルームID（1列目）のセットを作成
-            room_list_room_ids = set(values_series.tolist())
-
-            st.success(f"ルームIDとアカウントIDのマッピングを作成しました。ルームリストのルームID件数（管理対象判定用）: **{len(room_list_room_ids)}**")
+            account_id_to_room_id_map = pd.Series(values_series.values, index=keys_series).to_dict()
+            st.success("ルームIDとアカウントIDのマッピングを作成しました。")
         else:
-            st.error("ルーム名リストCSVにルームID（1列目）またはアカウントID（4列目）が見つかりません。売上分配額の紐づけと管理対象判定をスキップします。")
-            account_id_to_room_id_map_for_sales = {}
+            st.error("ルーム名リストCSVにアカウントID（4列目）が見つかりません。売上分配額の紐づけをスキップします。")
+            account_id_to_room_id_map = {}
             
         # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room.csv)
+        #st.subheader("ルーム売上分配額データの読み込みとMKランク決定")
         st.markdown(f"##### ルーム売上分配額データの読み込みとMKランク決定")
-        # ヘッダーなし(None)で読み込み
-        sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None) 
+        sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None)
         if sales_df is None: return
         
         # 全体分配額合計の取得（1列目1行目）
@@ -341,7 +327,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                 st.success(f"全体分配額合計（MKランク決定用）: **{round(total_revenue)}** 円")
             else:
                 st.warning("売上分配額CSVが空のため、全体分配額合計は0として処理します。")
-        except Exception:
+        except:
             st.error("売上分配額CSVの1列目1行目から全体分配額合計の取得に失敗しました。0として処理します。")
             
         # MKランクの決定
@@ -358,8 +344,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             # sales_values[1:].values と sales_keys[1:] で1行目をスキップ
             account_id_to_sales_map = pd.Series(sales_values[1:].values, index=sales_keys[1:]).to_dict()
             
-            # ルームIDに紐づける (room_id_to_account_id_map は liver_df から作成済み)
-            for room_id, account_id in room_id_to_account_id_map.items():
+            # ルームIDに紐づける
+            for account_id, room_id in account_id_to_room_id_map.items():
                 if account_id in account_id_to_sales_map:
                     room_id_to_sales_map[room_id] = account_id_to_sales_map[account_id]
         else:
@@ -369,8 +355,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         
         
         # 2.5. プレミアムライブ分配額データの読み込み (paid_live_hist_invoice_format.csv)
+        #st.subheader("プレミアムライブ分配額データの読み込み")
         st.markdown(f"##### プレミアムライブ分配額データの読み込み")
-        # ヘッダーなし(None)で読み込み
         paid_live_df = load_data(PAID_LIVE_URL, "プレミアムライブ分配額データ", header=None)
         
         room_id_to_paid_live_map = {}
@@ -382,14 +368,14 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             account_id_to_paid_live_map = pd.Series(paid_live_values.values, index=paid_live_keys).to_dict()
 
             # ルームIDに対する最終分配額マッピングを作成
-            for room_id, account_id in room_id_to_account_id_map.items():
+            for account_id, room_id in account_id_to_room_id_map.items():
                 if account_id in account_id_to_paid_live_map:
                     room_id_to_paid_live_map[room_id] = account_id_to_paid_live_map[account_id]
         st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
         
         # 2.6. タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format.csv)
+        #st.subheader("タイムチャージ分配額データの読み込み")
         st.markdown(f"##### タイムチャージ分配額データの読み込み")
-        # ヘッダーなし(None)で読み込み
         time_charge_df = load_data(TIME_CHARGE_URL, "タイムチャージ分配額データ", header=None)
         
         room_id_to_time_charge_map = {}
@@ -401,13 +387,14 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             account_id_to_time_charge_map = pd.Series(time_charge_values.values, index=time_charge_keys).to_dict()
 
             # ルームIDに対する最終分配額マッピングを作成
-            for room_id, account_id in room_id_to_account_id_map.items():
+            for account_id, room_id in account_id_to_room_id_map.items():
                 if account_id in account_id_to_time_charge_map:
                     room_id_to_time_charge_map[room_id] = account_id_to_time_charge_map[account_id]
         st.success(f"タイムチャージ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_time_charge_map)}**")
 
         
         # 3. 配信有無と売上分配額の突き合わせと結果生成
+        #st.header("3. 結果生成")
         st.markdown("#### 3. 結果生成")
         
         results = []
@@ -415,14 +402,6 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         for room_id in liver_ids:
             liver_alias = liver_alias_map.get(room_id, "愛称不明") 
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
-            current_account_id = room_id_to_account_id_map.get(room_id, "") # 売上紐づけのため保持
-
-            # 【修正済み】管理対象判定ロジック:
-            # liver_df (管理ライバーリスト) のルームIDが room_list_room_ids (ルームリストの1列目) に存在しない場合、"外"
-            is_managed = ""
-            # room_list_room_ids は 2.3 で room_list.csv の1列目（ルームID）から作成済み
-            if room_id not in room_list_room_ids:
-                is_managed = "外"
             
             # ルーム売上
             sales_amount = room_id_to_sales_map.get(room_id, "#N/A")
@@ -440,15 +419,19 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             results.append({
                 "ルームID": room_id,
                 "ルーム名": liver_alias, 
-                "管理対象": is_managed, # 追加項目
                 "配信有無": has_stream,
                 "配信月": delivery_month_str,
                 "支払月": payment_month_str,
+                # 修正箇所: ルーム売上分配額 => R分配額
                 "R分配額": sales_amount, 
                 "個別ランク": individual_rank,
+                # 修正箇所: ルーム売上支払想定額 => R支払想定額
                 "R支払想定額": payment_estimate, 
+                # 修正箇所: プレミアムライブ分配額 => PL分配額
                 "PL分配額": paid_live_amount, 
+                # 修正箇所: プレミアムライブ支払想定額 => PL支払想定額
                 "PL支払想定額": paid_live_payment_estimate, 
+                # 修正箇所: タイムチャージ支払想定額 => TC支払想定額
                 "TC支払想定額": time_charge_payment_estimate, 
             })
 
@@ -458,15 +441,19 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         column_order = [
             "ルームID",
             "ルーム名",
-            "管理対象", # 列順序に追加
             "配信有無",
             "配信月",
             "支払月",
+            # 修正箇所: ルーム売上分配額 => R分配額
             "R分配額", 
             "個別ランク", 
+            # 修正箇所: ルーム売上支払想定額 => R支払想定額
             "R支払想定額", 
+            # 修正箇所: プレミアムライブ分配額 => PL分配額
             "PL分配額", 
+            # 修正箇所: プレミアムライブ支払想定額 => PL支払想定額
             "PL支払想定額", 
+            # 修正箇所: タイムチャージ支払想定額 => TC支払想定額
             "TC支払想定額", 
         ]
         
@@ -480,6 +467,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     st.success("✅ 全てのデータ処理が完了しました！")
 
     # 4. 結果の表示とCSVダウンロード
+    #st.header("4. 結果リスト")
     st.markdown("#### 4. 結果リスト")
     
     # 画面表示用のヘッダーを「ライバー愛称」に変更
@@ -494,6 +482,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     })
     st.dataframe(display_df, use_container_width=True) 
     
+    #st.subheader("CSVダウンロード")
     st.markdown(f"##### CSVダウンロード")
 
     # CSV出力はBOM付きUTF-8（Excel対応）
