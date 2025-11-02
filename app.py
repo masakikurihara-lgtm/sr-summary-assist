@@ -298,12 +298,15 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             st.error("KPIデータCSVに配信ルームID（2列目）が見つかりません。")
             return
             
-        # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用
+        # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用 
+        # **【新規追加・修正】** 管理対象判定のためにも使用
         #st.subheader("ルームIDとアカウントIDの紐づけ")
-        st.markdown(f"##### ルームIDとアカウントIDの紐づけ")
+        st.markdown(f"##### ルームIDとアカウントIDの紐づけと管理対象判定リストの作成")
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
         if room_list_df is None: return
 
+        # 既存ロジック：アカウントIDとルームIDのマッピング作成
+        account_id_to_room_id_map = {}
         if room_list_df.shape[1] >= 4:
             keys_series = room_list_df.iloc[:, 3].astype(str).str.strip()
             values_series = room_list_df.iloc[:, 0].astype(str).str.strip()
@@ -311,7 +314,15 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             st.success("ルームIDとアカウントIDのマッピングを作成しました。")
         else:
             st.error("ルーム名リストCSVにアカウントID（4列目）が見つかりません。売上分配額の紐づけをスキップします。")
-            account_id_to_room_id_map = {}
+
+        # **【新規追加】** ROOM_LIST_URLの1列目（ルームID）のセットを作成
+        if room_list_df.shape[1] >= 1:
+            room_list_ids = set(room_list_df.iloc[:, 0].astype(str).str.strip().tolist())
+            st.success(f"room_list.csv のルームIDリストを読み込みました。件数: **{len(room_list_ids)}**")
+        else:
+            st.error("room_list.csvにルームID（1列目）が見つかりません。管理対象の判定をスキップします。")
+            room_list_ids = set()
+
             
         # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room.csv)
         #st.subheader("ルーム売上分配額データの読み込みとMKランク決定")
@@ -401,6 +412,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         
         for room_id in liver_ids:
             liver_alias = liver_alias_map.get(room_id, "愛称不明") 
+            
+            # **【新規追加】** 管理対象判定
+            # LIVER_LIST_URLに存在し、ROOM_LIST_URLに存在しない場合「外」
+            is_managed = "外" if room_id not in room_list_ids else ""
+            
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
             
             # ルーム売上
@@ -418,7 +434,9 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                     
             results.append({
                 "ルームID": room_id,
-                "ルーム名": liver_alias, 
+                "ルーム名": liver_alias,
+                # **【新規追加】** 管理対象
+                "管理対象": is_managed,
                 "配信有無": has_stream,
                 "配信月": delivery_month_str,
                 "支払月": payment_month_str,
@@ -441,6 +459,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         column_order = [
             "ルームID",
             "ルーム名",
+            # **【新規追加】** 管理対象
+            "管理対象",
             "配信有無",
             "配信月",
             "支払月",
