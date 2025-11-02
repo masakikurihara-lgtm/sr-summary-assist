@@ -106,7 +106,7 @@ def get_mk_rank(revenue):
     else:
         return 11
         
-# --- 支払想定額計算関数 ---
+# --- ルーム売上支払想定額計算関数 ---
 def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
     """
     個別ランク、MKランク、個別分配額から支払想定額を計算する
@@ -157,6 +157,29 @@ def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
         return str(round(payment_estimate)) 
 
     except Exception:
+        return "#ERROR_CALC"
+        
+# --- プレミアムライブ支払想定額計算関数 ---
+def calculate_paid_live_payment_estimate(paid_live_amount_str):
+    """
+    プレミアムライブ分配額から支払想定額を計算する
+    """
+    # プレミアムライブ分配額がない場合はブランクを返す
+    if paid_live_amount_str == "" or paid_live_amount_str == "#N/A":
+        return ""
+
+    try:
+        # 分配額を数値に変換
+        individual_revenue = float(paid_live_amount_str)
+        
+        # 計算式の適用: ($individualRevenue * 1.00 * 1.08 * 0.9) / 1.10 * 1.10
+        # 1.00 は乗算に影響しない
+        payment_estimate = (individual_revenue * 1.08 * 0.9) / 1.10 * 1.10
+        
+        # 結果を小数点以下を四捨五入して整数に丸める
+        return str(round(payment_estimate))
+
+    except ValueError:
         return "#ERROR_CALC"
 
 
@@ -296,7 +319,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             paid_live_keys = paid_live_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
             paid_live_values = paid_live_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
             
-            # 【修正点】1行目（全体合計）をスキップしない (paid_live_values.values, paid_live_keys)
+            # 【修正済み】1行目（全体合計）をスキップしない (paid_live_values.values, paid_live_keys)
             account_id_to_paid_live_map = pd.Series(paid_live_values.values, index=paid_live_keys).to_dict()
             st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
 
@@ -324,8 +347,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             # ルーム売上支払想定額の計算
             payment_estimate = calculate_payment_estimate(individual_rank, mk_rank, sales_amount)
             
-            # プレミアムライブ分配額の取得。データがない場合はブランク ("") を設定。
+            # プレミアムライブ分配額の取得
             paid_live_amount = room_id_to_paid_live_map.get(room_id, "")
+            
+            # 【新規】プレミアムライブ支払想定額の計算
+            paid_live_payment_estimate = calculate_paid_live_payment_estimate(paid_live_amount)
                 
             results.append({
                 "ルームID": room_id,
@@ -337,6 +363,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                 "個別ランク": individual_rank,
                 "ルーム売上支払想定額": payment_estimate, 
                 "プレミアムライブ分配額": paid_live_amount, 
+                "プレミアムライブ支払想定額": paid_live_payment_estimate, # 【新規】追加
             })
 
         results_df = pd.DataFrame(results)
@@ -351,7 +378,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             "ルーム売上分配額", 
             "個別ランク", 
             "ルーム売上支払想定額", 
-            "プレミアムライブ分配額", # 確定
+            "プレミアムライブ分配額", 
+            "プレミアムライブ支払想定額", # 確定
             # 今後ここに新しい項目を追加していく
         ]
         
