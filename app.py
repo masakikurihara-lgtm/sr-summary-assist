@@ -422,12 +422,17 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                 "配信有無": has_stream,
                 "配信月": delivery_month_str,
                 "支払月": payment_month_str,
-                "ルーム売上分配額": sales_amount, 
+                # 修正箇所: ルーム売上分配額 => R分配額
+                "R分配額": sales_amount, 
                 "個別ランク": individual_rank,
-                "ルーム売上支払想定額": payment_estimate, 
-                "プレミアムライブ分配額": paid_live_amount, 
-                "プレミアムライブ支払想定額": paid_live_payment_estimate, 
-                "タイムチャージ支払想定額": time_charge_payment_estimate, 
+                # 修正箇所: ルーム売上支払想定額 => R支払想定額
+                "R支払想定額": payment_estimate, 
+                # 修正箇所: プレミアムライブ分配額 => PL分配額
+                "PL分配額": paid_live_amount, 
+                # 修正箇所: プレミアムライブ支払想定額 => PL支払想定額
+                "PL支払想定額": paid_live_payment_estimate, 
+                # 修正箇所: タイムチャージ支払想定額 => TC支払想定額
+                "TC支払想定額": time_charge_payment_estimate, 
             })
 
         results_df = pd.DataFrame(results)
@@ -439,12 +444,17 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             "配信有無",
             "配信月",
             "支払月",
-            "ルーム売上分配額", 
+            # 修正箇所: ルーム売上分配額 => R分配額
+            "R分配額", 
             "個別ランク", 
-            "ルーム売上支払想定額", 
-            "プレミアムライブ分配額", 
-            "プレミアムライブ支払想定額", 
-            "タイムチャージ支払想定額", 
+            # 修正箇所: ルーム売上支払想定額 => R支払想定額
+            "R支払想定額", 
+            # 修正箇所: プレミアムライブ分配額 => PL分配額
+            "PL分配額", 
+            # 修正箇所: プレミアムライブ支払想定額 => PL支払想定額
+            "PL支払想定額", 
+            # 修正箇所: タイムチャージ支払想定額 => TC支払想定額
+            "TC支払想定額", 
         ]
         
         final_columns = [col for col in column_order if col in results_df.columns]
@@ -461,7 +471,15 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     st.markdown("#### 4. 結果リスト")
     
     # 画面表示用のヘッダーを「ライバー愛称」に変更
-    display_df = results_df.rename(columns={"ルーム名": "ライバー愛称"})
+    # NOTE: DataFrameの表示時にも列名を変更する
+    display_df = results_df.rename(columns={
+        "ルーム名": "ライバー愛称",
+        "R分配額": "R分配額",
+        "R支払想定額": "R支払想定額",
+        "PL分配額": "PL分配額",
+        "PL支払想定額": "PL支払想定額",
+        "TC支払想定額": "TC支払想定額"
+    })
     st.dataframe(display_df, use_container_width=True) 
     
     #st.subheader("CSVダウンロード")
