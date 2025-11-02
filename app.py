@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 # --- ページ設定 ---
 # 【修正箇所】: st.set_set_page_config を st.set_page_config に修正
-st.set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整理ツール")
+st.set_page_config(layout="wide", page_title="SHOWROOM 月初サマリー作成ツール")
 
 
 # --- 定数（URL） ---
@@ -218,7 +218,13 @@ def calculate_time_charge_payment_estimate(time_charge_amount_str):
 
 ## メインアプリケーション
 def main():
-    st.title("🎤 SHOWROOMライバーデータ整理ツール (配信有無 & 売上チェック)")
+    #st.title("🎤 SHOWROOM 月初サマリー作成ツール")
+    st.markdown(
+        "<h1 style='font-size:28px; text-align:left; color:#1f2937;'>🎤 SHOWROOM 月初サマリー作成ツール</h1>",
+        unsafe_allow_html=True
+    )  
+    st.markdown("<p style='text-align: left;'>⚠️ <b>注意</b>: このツールは、<b>Secretsに設定されたCookieが有効な間のみ</b>動作します。</p>", unsafe_allow_html=True)
+    st.markdown("---")
 
     st.header("1. 処理月の選択と実行")
     
