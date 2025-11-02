@@ -1,456 +1,849 @@
 import streamlit as st
+import requests
 import pandas as pd
-from io import StringIO
+import pytz
 import datetime
-from dateutil.relativedelta import relativedelta
+import io
+from streamlit_autorefresh import st_autorefresh
+import ftplib
+import io
+import datetime
+import os
 
-
-# --- ページ設定 ---
-# 【修正箇所】: st.set_set_page_config を st.set_page_config に修正
-st.set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整理ツール")
-
-
-# --- 定数（URL） ---
-KPI_DATA_BASE_URL = "https://mksoul-pro.com/showroom/csv/{year}-{month:02d}_all_all.csv"
-LIVER_LIST_URL = "https://mksoul-pro.com/showroom/file/m-liver-list.csv"
-ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
-SALES_DATA_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_with_mixed_rate_csv_donwload_for_room.csv"
-# プレミアムライブ分配額データURL
-PAID_LIVE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/paid_live_hist_invoice_format.csv"
-# タイムチャージ分配額データURL
-TIME_CHARGE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/show_rank_time_charge_hist_invoice_format.csv"
-
-
-## データの準備・読み込み関数
-@st.cache_data
-def load_data(url, name="データ", header='infer'):
-    """URLからCSVを読み込み、DataFrameとして返す"""
+def upload_csv_to_ftp(filename: str, csv_buffer: io.BytesIO):
+    """Secretsに登録されたFTP設定を使ってCSVをアップロード"""
+    ftp_info = st.secrets["ftp"]
     try:
-        # データの読み込みは文字コードの問題が起きにくいため、標準のまま
-        df = pd.read_csv(url, header=header) 
-        return df
+        ftp = ftplib.FTP(ftp_info["host"])
+        ftp.login(ftp_info["user"], ftp_info["password"])
+        ftp.cwd("/rokudouji.net/mksoul/showroom_onlives_logs")
+
+        # アップロード
+        csv_buffer.seek(0)
+        ftp.storbinary(f"STOR {filename}", csv_buffer)
+
+        # --- 古いファイル削除（48時間以上前） ---
+        file_list = []
+        ftp.retrlines("LIST", file_list.append)
+        now = datetime.datetime.now()
+        for entry in file_list:
+            parts = entry.split(maxsplit=8)
+            if len(parts) < 9:
+                continue
+            name = parts[-1]
+            if not name.endswith(".csv"):
+                continue
+            # 日時文字列が含まれる形式なら抽出
+            try:
+                time_str = name.split("_")[-1].replace(".csv", "")
+                file_dt = datetime.datetime.strptime(time_str, "%Y%m%d_%H%M%S")
+                if (now - file_dt).total_seconds() > 48 * 3600:
+                    ftp.delete(name)
+            except Exception:
+                continue
+
+        ftp.quit()
+        st.success(f"✅ FTPに保存完了: {filename}")
     except Exception as e:
-        st.error(f"{name}の読み込みに失敗しました: {url}\nエラー: {e}")
-        return None
-
-@st.cache_data
-def get_processed_months():
-    """プルダウンに表示する処理月リストを生成する"""
-    today = datetime.date.today()
-    current_date = today - relativedelta(months=1)
-    processed_months = []
-
-    for i in range(12): 
-        display_str = f"{current_date.year}年{current_date.month:02d}月分"
-        value_str = f"{current_date.year}-{current_date.month:02d}"
-        processed_months.append((display_str, value_str))
-        current_date = current_date - relativedelta(months=1)
-            
-    return processed_months
+        st.error(f"FTP保存中にエラー: {e}")
 
 
-# --- 個別ランク判定関数 ---
-def get_individual_rank(sales_amount_str):
-    """
-    ルーム売上分配額（文字列）から個別ランクを判定する
-    """
-    if sales_amount_str == "#N/A":
-        return "#N/A"
-    
-    try:
-        amount = float(sales_amount_str)
-        
-        if amount >= 900001:
-            return "SSS"
-        elif amount >= 450001:
-            return "SS"
-        elif amount >= 270001:
-            return "S"
-        elif amount >= 135001:
-            return "A"
-        elif amount >= 90001:
-            return "B"
-        elif amount >= 45001:
-            return "C"
-        elif amount >= 22501:
-            return "D"
-        elif amount >= 0:
-            return "E"
-        else:
-            return "E" 
-            
-    except ValueError:
-        return "#ERROR"
-
-# --- MKランク判定関数 ---
-def get_mk_rank(revenue):
-    """
-    全体分配額合計からMKランク（1〜11）を判定する
-    """
-    if revenue <= 175000:
-        return 1
-    elif revenue <= 350000:
-        return 2
-    elif revenue <= 525000:
-        return 3
-    elif revenue <= 700000:
-        return 4
-    elif revenue <= 875000:
-        return 5
-    elif revenue <= 1050000:
-        return 6
-    elif revenue <= 1225000:
-        return 7
-    elif revenue <= 1400000:
-        return 8
-    elif revenue <= 1575000:
-        return 9
-    elif revenue <= 1750000:
-        return 10
-    else:
-        return 11
-        
-# --- ルーム売上支払想定額計算関数 ---
-def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
-    """
-    個別ランク、MKランク、個別分配額から支払想定額を計算する
-    """
-    if individual_revenue == "#N/A" or individual_rank == "#N/A":
-        return "#N/A"
-
-    try:
-        individual_revenue = float(individual_revenue)
-        # 個別ランクに応じた基本レートの辞書 (mk_rank 1, 3, 5, 7, 9, 11 のキーを使用)
-        rank_rates = {
-            'D': {1: 0.750, 3: 0.755, 5: 0.760, 7: 0.765, 9: 0.770, 11: 0.775},
-            'E': {1: 0.725, 3: 0.730, 5: 0.735, 7: 0.740, 9: 0.745, 11: 0.750},
-            'C': {1: 0.775, 3: 0.780, 5: 0.785, 7: 0.790, 9: 0.795, 11: 0.800},
-            'B': {1: 0.800, 3: 0.805, 5: 0.810, 7: 0.815, 9: 0.820, 11: 0.825},
-            'A': {1: 0.825, 3: 0.830, 5: 0.835, 7: 0.840, 9: 0.845, 11: 0.850},
-            'S': {1: 0.850, 3: 0.855, 5: 0.860, 7: 0.865, 9: 0.870, 11: 0.875},
-            'SS': {1: 0.875, 3: 0.880, 5: 0.885, 7: 0.890, 9: 0.895, 11: 0.900},
-            'SSS': {1: 0.900, 3: 0.905, 5: 0.910, 7: 0.915, 9: 0.920, 11: 0.925},
-        }
-
-        # MKランクに応じてキーを決定 (1,2 -> 1, 3,4 -> 3, ...)
-        if mk_rank in [1, 2]:
-            key = 1
-        elif mk_rank in [3, 4]:
-            key = 3
-        elif mk_rank in [5, 6]:
-            key = 5
-        elif mk_rank in [7, 8]:
-            key = 7
-        elif mk_rank in [9, 10]:
-            key = 9
-        elif mk_rank == 11:
-            key = 11
-        else:
-            return "#ERROR_MK"
-
-        # 適用レートの取得
-        rate = rank_rates.get(individual_rank, {}).get(key)
-        
-        if rate is None:
-            return "#ERROR_RANK"
-
-        # 計算式の適用: ($individualRevenue * 1.08 * $rate) / 1.10 * 1.10
-        payment_estimate = (individual_revenue * 1.08 * rate) / 1.10 * 1.10
-        
-        # 結果を小数点以下を四捨五入して整数に丸める
-        return str(round(payment_estimate)) 
-
-    except Exception:
-        return "#ERROR_CALC"
-        
-# --- プレミアムライブ支払想定額計算関数 ---
-def calculate_paid_live_payment_estimate(paid_live_amount_str):
-    """
-    プレミアムライブ分配額から支払想定額を計算する
-    """
-    # プレミアムライブ分配額がない場合はブランクを返す
-    if paid_live_amount_str == "" or paid_live_amount_str == "#N/A":
-        return ""
-
-    try:
-        # 分配額を数値に変換
-        individual_revenue = float(paid_live_amount_str)
-        
-        # 計算式の適用: ($individualRevenue * 1.00 * 1.08 * 0.9) / 1.10 * 1.10
-        payment_estimate = (individual_revenue * 1.08 * 0.9) / 1.10 * 1.10
-        
-        # 結果を小数点以下を四捨五入して整数に丸める
-        return str(round(payment_estimate))
-
-    except ValueError:
-        return "#ERROR_CALC"
-
-# --- タイムチャージ支払想定額計算関数 ---
-def calculate_time_charge_payment_estimate(time_charge_amount_str):
-    """
-    タイムチャージ分配額から支払想定額を計算する
-    """
-    # タイムチャージ分配額がない場合はブランクを返す
-    if time_charge_amount_str == "" or time_charge_amount_str == "#N/A":
-        return ""
-
-    try:
-        # 分配額を数値に変換
-        individual_revenue = float(time_charge_amount_str)
-        
-        # 計算式の適用: ($individualRevenue * 1.08 * 1.00) / 1.10 * 1.10
-        payment_estimate = (individual_revenue * 1.08 * 1.00) / 1.10 * 1.10
-        
-        # 結果を小数点以下を四捨五入して整数に丸める
-        return str(round(payment_estimate))
-
-    except ValueError:
-        return "#ERROR_CALC"
-
-## メインアプリケーション
-def main():
-    st.title("🎤 SHOWROOMライバーデータ整理ツール (配信有無 & 売上チェック)")
-
-    st.header("1. 処理月の選択と実行")
-    
-    month_options = get_processed_months()
-    display_options = [opt[0] for opt in month_options]
-    value_options = [opt[1] for opt in month_options]
-    
-    selected_display_month = st.selectbox(
-        "処理する**配信月**を選択してください:",
-        options=display_options,
-        index=0
-    )
-    
-    try:
-        selected_index = display_options.index(selected_display_month)
-        selected_value_month = value_options[selected_index]
-        year, month = map(int, selected_value_month.split('-'))
-        
-        delivery_month_str = f"{year}/{month:02d}"
-        delivery_date = datetime.date(year, month, 1)
-        payment_date = delivery_date + relativedelta(months=2)
-        payment_month_str = f"{payment_date.year}/{payment_date.month:02d}"
-        
-    except:
-        st.warning("有効な処理月が選択されていません。")
+def auto_backup_if_needed():
+    """100件ごとまたはトラッキング停止時にFTPへログをバックアップ"""
+    room = st.session_state.room_id
+    # 必要ログが無ければスキップ
+    if not room:
         return
-    
-    st.markdown("---")
-    if st.button("🚀 データ処理を開始する", type="primary"):
-        process_data(year, month, delivery_month_str, payment_month_str)
-    else:
-        st.info(f"選択された配信月: **{selected_display_month}**。処理を開始するには上記のボタンを押してください。")
-    st.markdown("---")
+
+    # 条件：コメント＋ギフトの合計が100件ごと または トラッキング停止時
+    total = len(st.session_state.comment_log) + len(st.session_state.gift_log)
+    if total == 0:
+        return
+
+    # トラッキング停止時強制保存 or 100件ごと保存
+    if (not st.session_state.is_tracking) or (total % 100 == 0):
+        timestamp = datetime.datetime.now(JST).strftime("%Y%m%d_%H%M%S")
+        filename = f"srlog_{room}_{timestamp}.csv"
+        buf = io.StringIO()
+        # コメントログ
+        if st.session_state.comment_log:
+            df_c = pd.DataFrame(st.session_state.comment_log)
+            buf.write("### Comments\n")
+            df_c.to_csv(buf, index=False, encoding='utf-8-sig')
+        # ギフトログ
+        if st.session_state.gift_log:
+            buf.write("\n### Gifts\n")
+            df_g = pd.DataFrame(st.session_state.gift_log)
+            df_g.to_csv(buf, index=False, encoding='utf-8-sig')
+
+        content = buf.getvalue().encode("utf-8-sig")
+        upload_to_ftp(content, filename)
 
 
-# データ処理のメインロジック (ボタンが押されたときのみ実行)
-def process_data(year, month, delivery_month_str, payment_month_str):
-    
-    with st.spinner("データを読み込み、配信有無と売上をチェックしています..."):
-        
-        # --- 2. データの読み込みとマッピング ---
-        
-        # 2.1. 管理ライバーリストの読み込み (m-liver-list.csv)
-        st.subheader("管理ライバーリストの読み込みと愛称マッピングの作成")
-        liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
-        if liver_df is None: return
-        
-        if liver_df.shape[1] >= 2:
-            df_keys = liver_df.iloc[:, 0].astype(str).str.strip()
-            df_values = liver_df.iloc[:, 1].astype(str).str.strip() 
-            liver_alias_map = pd.Series(df_values.values, index=df_keys).to_dict()
-            liver_ids = df_keys.tolist()
-            st.success(f"管理ライバーのルームIDリスト（1列目）と愛称（2列目）を読み込みました。件数: **{len(liver_ids)}**")
-        else:
-            st.error("管理ライバーリストCSVにデータ（1列目:ID, 2列目:愛称）が見つかりません。")
+# --- ▼ 共通FTP保存関数（コメント・ギフトログ用） ▼ ---
+def save_log_to_ftp(log_type: str):
+    """
+    コメント or ギフトログをFTPに保存
+    log_type: "comment" または "gift"
+    """
+    try:
+        room = st.session_state.room_id
+        if not room:
             return
-        
-        # 2.2. KPIデータ（配信有無）の読み込み (YYYY-MM_all_all.csv)
-        st.subheader(f"{year}年{month:02d}月分のKPIデータの読み込み")
-        kpi_url = KPI_DATA_BASE_URL.format(year=year, month=month)
-        kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ")
-        if kpi_df is None: return
 
-        if kpi_df.shape[1] > 1:
-            kpi_room_ids = set(kpi_df.iloc[:, 1].astype(str).str.strip().tolist())
-            st.success(f"配信があったルーム件数: **{len(kpi_room_ids)}** (KPIデータは2列目のIDを使用)")
-        else:
-            st.error("KPIデータCSVに配信ルームID（2列目）が見つかりません。")
-            return
-            
-        # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用
-        st.subheader("ルームIDとアカウントIDの紐づけ")
-        room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
-        if room_list_df is None: return
+        timestamp = datetime.datetime.now(JST).strftime("%Y%m%d_%H%M%S")
 
-        if room_list_df.shape[1] >= 4:
-            keys_series = room_list_df.iloc[:, 3].astype(str).str.strip()
-            values_series = room_list_df.iloc[:, 0].astype(str).str.strip()
-            account_id_to_room_id_map = pd.Series(values_series.values, index=keys_series).to_dict()
-            st.success("ルームIDとアカウントIDのマッピングを作成しました。")
-        else:
-            st.error("ルーム名リストCSVにアカウントID（4列目）が見つかりません。売上分配額の紐づけをスキップします。")
-            account_id_to_room_id_map = {}
-            
-        # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room.csv)
-        st.subheader("ルーム売上分配額データの読み込みとMKランク決定")
-        sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None)
-        if sales_df is None: return
-        
-        # 全体分配額合計の取得（1列目1行目）
-        total_revenue = 0.0
-        try:
-            if sales_df.shape[0] > 0 and sales_df.shape[1] > 0:
-                total_revenue = float(sales_df.iloc[0, 0])
-                st.success(f"全体分配額合計（MKランク決定用）: **{round(total_revenue)}** 円")
-            else:
-                st.warning("売上分配額CSVが空のため、全体分配額合計は0として処理します。")
-        except:
-            st.error("売上分配額CSVの1列目1行目から全体分配額合計の取得に失敗しました。0として処理します。")
-            
-        # MKランクの決定
-        mk_rank = get_mk_rank(total_revenue)
-        st.info(f"計算されたMKランク: **{mk_rank}**")
-        
-        # 個別ルームの分配額マッピングの作成
-        room_id_to_sales_map = {}
-        if sales_df.shape[1] >= 2:
-            sales_keys = sales_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
-            sales_values = sales_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
-            
-            # 1行目の全体分配額合計を除く
-            # sales_values[1:].values と sales_keys[1:] で1行目をスキップ
-            account_id_to_sales_map = pd.Series(sales_values[1:].values, index=sales_keys[1:]).to_dict()
-            
-            # ルームIDに紐づける
-            for account_id, room_id in account_id_to_room_id_map.items():
-                if account_id in account_id_to_sales_map:
-                    room_id_to_sales_map[room_id] = account_id_to_sales_map[account_id]
-        else:
-            st.error("売上分配額CSVに分配額（1列目）またはアカウントID（2列目）が見つかりません。")
-            account_id_to_sales_map = {}
-        st.success(f"個別売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
-        
-        
-        # 2.5. プレミアムライブ分配額データの読み込み (paid_live_hist_invoice_format.csv)
-        st.subheader("プレミアムライブ分配額データの読み込み")
-        paid_live_df = load_data(PAID_LIVE_URL, "プレミアムライブ分配額データ", header=None)
-        
-        room_id_to_paid_live_map = {}
-        if paid_live_df is not None and paid_live_df.shape[1] >= 2:
-            paid_live_keys = paid_live_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
-            paid_live_values = paid_live_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
-            
-            # 1行目からライバーデータ
-            account_id_to_paid_live_map = pd.Series(paid_live_values.values, index=paid_live_keys).to_dict()
+        # ===== コメントログ処理 =====
+        if log_type == "comment":
+            filtered_comments = [
+                log for log in st.session_state.comment_log
+                if not any(keyword in log.get('name', '') or keyword in log.get('comment', '')
+                           for keyword in SYSTEM_COMMENT_KEYWORDS)
+            ]
+            if not filtered_comments:
+                return
 
-            # ルームIDに対する最終分配額マッピングを作成
-            for account_id, room_id in account_id_to_room_id_map.items():
-                if account_id in account_id_to_paid_live_map:
-                    room_id_to_paid_live_map[room_id] = account_id_to_paid_live_map[account_id]
-        st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
-        
-        # 2.6. タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format.csv)
-        st.subheader("タイムチャージ分配額データの読み込み")
-        time_charge_df = load_data(TIME_CHARGE_URL, "タイムチャージ分配額データ", header=None)
-        
-        room_id_to_time_charge_map = {}
-        if time_charge_df is not None and time_charge_df.shape[1] >= 2:
-            time_charge_keys = time_charge_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
-            time_charge_values = time_charge_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
-            
-            # 1行目からライバーデータ
-            account_id_to_time_charge_map = pd.Series(time_charge_values.values, index=time_charge_keys).to_dict()
-
-            # ルームIDに対する最終分配額マッピングを作成
-            for account_id, room_id in account_id_to_room_id_map.items():
-                if account_id in account_id_to_time_charge_map:
-                    room_id_to_time_charge_map[room_id] = account_id_to_time_charge_map[account_id]
-        st.success(f"タイムチャージ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_time_charge_map)}**")
-
-        
-        # 3. 配信有無と売上分配額の突き合わせと結果生成
-        st.header("3. 結果生成")
-        
-        results = []
-        
-        for room_id in liver_ids:
-            liver_alias = liver_alias_map.get(room_id, "愛称不明") 
-            has_stream = "有り" if room_id in kpi_room_ids else "なし"
-            
-            # ルーム売上
-            sales_amount = room_id_to_sales_map.get(room_id, "#N/A")
-            individual_rank = get_individual_rank(sales_amount)
-            payment_estimate = calculate_payment_estimate(individual_rank, mk_rank, sales_amount)
-            
-            # プレミアムライブ
-            paid_live_amount = room_id_to_paid_live_map.get(room_id, "")
-            paid_live_payment_estimate = calculate_paid_live_payment_estimate(paid_live_amount)
-            
-            # タイムチャージ
-            time_charge_amount = room_id_to_time_charge_map.get(room_id, "")
-            time_charge_payment_estimate = calculate_time_charge_payment_estimate(time_charge_amount)
-                
-            results.append({
-                "ルームID": room_id,
-                "ルーム名": liver_alias, 
-                "配信有無": has_stream,
-                "配信月": delivery_month_str,
-                "支払月": payment_month_str,
-                "ルーム売上分配額": sales_amount, 
-                "個別ランク": individual_rank,
-                "ルーム売上支払想定額": payment_estimate, 
-                "プレミアムライブ分配額": paid_live_amount, 
-                "プレミアムライブ支払想定額": paid_live_payment_estimate, 
-                "タイムチャージ支払想定額": time_charge_payment_estimate, 
+            comment_df = pd.DataFrame(filtered_comments)
+            comment_df['created_at'] = pd.to_datetime(comment_df['created_at'], unit='s') \
+                .dt.tz_localize('UTC').dt.tz_convert(JST).dt.strftime("%Y-%m-%d %H:%M:%S")
+            comment_df['user_id'] = [log.get('user_id', 'N/A') for log in filtered_comments]
+            comment_df = comment_df.rename(columns={
+                'name': 'ユーザー名',
+                'comment': 'コメント内容',
+                'created_at': 'コメント時間',
+                'user_id': 'ユーザーID'
             })
+            cols = ['コメント時間', 'ユーザー名', 'コメント内容', 'ユーザーID']
+            buf = io.BytesIO()
+            comment_df[cols].to_csv(buf, index=False, encoding='utf-8-sig')
+            buf.seek(0)
+            filename = f"comment_log_{room}_{timestamp}.csv"
+            upload_csv_to_ftp(filename, buf)
 
-        results_df = pd.DataFrame(results)
+        # ===== ギフトログ処理 =====
+        elif log_type == "gift":
+            if not st.session_state.gift_log:
+                return
+            gift_df = pd.DataFrame(st.session_state.gift_log)
+            gift_df['created_at'] = pd.to_datetime(gift_df['created_at'], unit='s') \
+                .dt.tz_localize('UTC').dt.tz_convert(JST).dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 結果の列順序を明示的に指定
-        column_order = [
-            "ルームID",
-            "ルーム名",
-            "配信有無",
-            "配信月",
-            "支払月",
-            "ルーム売上分配額", 
-            "個別ランク", 
-            "ルーム売上支払想定額", 
-            "プレミアムライブ分配額", 
-            "プレミアムライブ支払想定額", 
-            "タイムチャージ支払想定額", 
-        ]
-        
-        final_columns = [col for col in column_order if col in results_df.columns]
-        results_df = results_df[final_columns]
+            if st.session_state.gift_list_map:
+                gift_info_df = pd.DataFrame.from_dict(st.session_state.gift_list_map, orient='index')
+                gift_info_df.index = gift_info_df.index.astype(str)
+                gift_df['gift_id'] = gift_df['gift_id'].astype(str)
+                gift_df = gift_df.set_index('gift_id') \
+                    .join(gift_info_df, on='gift_id', lsuffix='_user_data', rsuffix='_gift_info') \
+                    .reset_index()
+
+            gift_df = gift_df.rename(columns={
+                'name_user_data': 'ユーザー名',
+                'name_gift_info': 'ギフト名',
+                'num': '個数',
+                'point': 'ポイント',
+                'created_at': 'ギフト時間',
+                'user_id': 'ユーザーID'
+            })
+            cols = ['ギフト時間', 'ユーザー名', 'ギフト名', '個数', 'ポイント', 'ユーザーID']
+            buf = io.BytesIO()
+            gift_df[cols].to_csv(buf, index=False, encoding='utf-8-sig')
+            buf.seek(0)
+            filename = f"gift_log_{room}_{timestamp}.csv"
+            upload_csv_to_ftp(filename, buf)
+    except Exception as e:
+        st.error(f"ログ保存中にエラー: {e}")
 
 
-    st.success("✅ 全てのデータ処理が完了しました！")
 
-    # 4. 結果の表示とCSVダウンロード
-    st.header("4. 結果リスト")
+# ページ設定
+st.set_page_config(
+    page_title="SHOWROOM 配信ログ収集ツール",
+    page_icon="🎤",
+    layout="wide",
+)
+
+# 定数
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+JST = pytz.timezone('Asia/Tokyo')
+ONLIVES_API_URL = "https://www.showroom-live.com/api/live/onlives"
+COMMENT_API_URL = "https://www.showroom-live.com/api/live/comment_log"
+GIFT_API_URL = "https://www.showroom-live.com/api/live/gift_log"
+GIFT_LIST_API_URL = "https://www.showroom-live.com/api/live/gift_list"
+FAN_LIST_API_URL = "https://www.showroom-live.com/api/active_fan/users"
+SYSTEM_COMMENT_KEYWORDS = ["SHOWROOM Management", "Earn weekly glittery rewards!", "ウィークリーグリッター特典獲得中！", "SHOWROOM運営"]
+DEFAULT_AVATAR = "https://static.showroom-live.com/image/avatar/default_avatar.png"
+ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
+
+if "authenticated" not in st.session_state:  #認証用
+    st.session_state.authenticated = False  #認証用
+
+# CSSスタイル
+CSS_STYLE = """
+<style>
+.dashboard-container {
+    height: 500px;
+    overflow-y: scroll;
+    padding-right: 15px;
+}
+.comment-item-row, .gift-item-row, .fan-info-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.comment-avatar, .gift-avatar, .fan-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+.comment-content, .gift-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+.comment-time, .gift-time {
+    font-size: 0.8em;
+    color: #888;
+}
+.comment-user, .gift-user {
+    font-weight: bold;
+    color: #333;
+}
+.comment-text {
+    margin-top: 4px;
+}
+.gift-info-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+.gift-image {
+    width: 30px;
+    height: 30px;
+    object-fit: contain;
+}
+.highlight-10000 { background-color: #ffe5e5; }
+.highlight-30000 { background-color: #ffcccc; }
+.highlight-60000 { background-color: #ffb2b2; }
+.highlight-100000 { background-color: #ff9999; }
+.highlight-300000 { background-color: #ff7f7f; }
+.fan-level {
+    font-weight: bold;
+    color: #555;
+}
+.tracking-success {
+    background-color: #e6f7e6;
+    color: #333333;
+    padding: 1rem;
+    border-left: 5px solid #4CAF50;
+    margin-bottom: -36px !important;
+    margin-top: 0 !important;
+}
+</style>
+"""
+st.markdown(CSS_STYLE, unsafe_allow_html=True)
+
+# エラーメッセージ・警告メッセージの幅を100%に変更
+CUSTOM_MSG_CSS = """
+<style>
+/* 通常の警告・情報用 */
+div[data-testid="stNotification"] {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+/* st.error 専用: Streamlit 1.38+ では .stAlert クラスを使用 */
+div.stAlert {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+/* 追加の親要素にも適用（念のため） */
+section.main div.block-container {
+    width: 100% !important;
+}
+</style>
+"""
+st.markdown(CUSTOM_MSG_CSS, unsafe_allow_html=True)
+
+
+# セッション状態の初期化
+if "room_id" not in st.session_state:
+    st.session_state.room_id = ""
+if "is_tracking" not in st.session_state:
+    st.session_state.is_tracking = False
+if "comment_log" not in st.session_state:
+    st.session_state.comment_log = []
+if "gift_log" not in st.session_state:
+    st.session_state.gift_log = []
+if "fan_list" not in st.session_state:
+    st.session_state.fan_list = []
+if "gift_list_map" not in st.session_state:
+    st.session_state.gift_list_map = {}
+if 'onlives_data' not in st.session_state:
+    st.session_state.onlives_data = {}
+if 'total_fan_count' not in st.session_state:
+    st.session_state.total_fan_count = 0
+
+# --- API連携関数 ---
+
+def get_onlives_rooms():
+    onlives = {}
+    try:
+        response = requests.get(ONLIVES_API_URL, headers=HEADERS, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        all_lives = []
+        if isinstance(data, dict):
+            if 'onlives' in data and isinstance(data['onlives'], list):
+                for genre_group in data['onlives']:
+                    if 'lives' in genre_group and isinstance(genre_group['lives'], list):
+                        all_lives.extend(genre_group['lives'])
+            for live_type in ['official_lives', 'talent_lives', 'amateur_lives']:
+                if live_type in data and isinstance(data.get(live_type), list):
+                    all_lives.extend(data[live_type])
+        for room in all_lives:
+            room_id = None
+            if isinstance(room, dict):
+                room_id = room.get('room_id')
+                if room_id is None and 'live_info' in room and isinstance(room['live_info'], dict):
+                    room_id = room['live_info'].get('room_id')
+                if room_id is None and 'room' in room and isinstance(room['room'], dict):
+                    room_id = room['room'].get('room_id')
+            if room_id:
+                onlives[int(room_id)] = room
+    except requests.exceptions.RequestException as e:
+        st.error(f"配信情報取得中にエラーが発生しました: {e}")
+    except (ValueError, AttributeError):
+        st.error("配信情報のJSONデコードまたは解析に失敗しました。")
+    return onlives
+
+def get_and_update_log(log_type, room_id):
+    api_url = COMMENT_API_URL if log_type == "comment" else GIFT_API_URL
+    url = f"{api_url}?room_id={room_id}"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=5)
+        response.raise_for_status()
+        new_log = response.json().get(f'{log_type}_log', [])
+        existing_cache = st.session_state[f"{log_type}_log"]
+        existing_log_keys = {(log.get('created_at'), log.get('name')) for log in existing_cache}
+        for log in new_log:
+            log_key = (log.get('created_at'), log.get('name'))
+            if log_key not in existing_log_keys:
+                existing_cache.append(log)
+                existing_log_keys.add(log_key)
+        existing_cache.sort(key=lambda x: x.get('created_at', 0), reverse=True)
+        return existing_cache
+    except requests.exceptions.RequestException:
+        st.warning(f"ルームID {room_id} の{log_type}ログ取得中にエラーが発生しました。配信中か確認してください。")
+        return st.session_state.get(f"{log_type}_log", [])
+
+def get_gift_list(room_id):
+    if st.session_state.gift_list_map:
+        return st.session_state.gift_list_map
+    url = f"{GIFT_LIST_API_URL}?room_id={room_id}"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        gift_list_map = {}
+        for gift in data.get('normal', []) + data.get('special', []):
+            try:
+                point_value = int(gift.get('point', 0))
+            except (ValueError, TypeError):
+                point_value = 0
+            gift_list_map[str(gift['gift_id'])] = {
+                'name': gift.get('gift_name', 'N/A'),
+                'point': point_value,
+                'image': gift.get('image', '')
+            }
+        st.session_state.gift_list_map = gift_list_map
+        return gift_list_map
+    except requests.exceptions.RequestException as e:
+        st.error(f"ルームID {room_id} のギフトリスト取得中にエラーが発生しました: {e}")
+        return {}
+
+def get_fan_list(room_id):
+    fan_list = []
+    offset = 0
+    limit = 50
+    current_ym = datetime.datetime.now(JST).strftime("%Y%m")
+    total_user_count = 0
+    while True:
+        url = f"{FAN_LIST_API_URL}?room_id={room_id}&ym={current_ym}&offset={offset}&limit={limit}"
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            users = data.get("users", [])
+            if offset == 0 and "total_user_count" in data:
+                total_user_count = data["total_user_count"]
+            if not users:
+                break
+            for user in users:
+                if user.get('level', 0) < 10:
+                    return fan_list, total_user_count
+                fan_list.append(user)
+            offset += len(users)
+            if len(users) < limit:
+                break
+        except requests.exceptions.RequestException:
+            st.warning(f"ルームID {room_id} のファンリスト取得中にエラーが発生しました。")
+            break
+    return fan_list, total_user_count
+
+# --- ルームリスト取得関数 ---
+def get_room_list():
+    try:
+        df = pd.read_csv(ROOM_LIST_URL)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+# --- UI構築 ---
+
+#st.markdown("<h1 style='font-size:2.5em;'>🎤 SHOWROOM 配信ログ収集ツール</h1>", unsafe_allow_html=True)
+st.markdown(
+    "<h1 style='font-size:28px; text-align:left; color:#1f2937;'>🎤 SHOWROOM 配信ログ収集ツール</h1>",
+    unsafe_allow_html=True
+)
+st.write("配信中のコメント、スペシャルギフト、ファンリストをリアルタイムで収集し、ログをダウンロードできます。")
+st.write("")
+
+
+# ▼▼ 認証ステップ ▼▼
+if not st.session_state.authenticated:
+    st.markdown("##### 🔑 認証コードを入力してください")
+    input_room_id = st.text_input(
+        "認証コードを入力してください:",
+        placeholder="",
+        type="password",
+        key="room_id_input"
+    )
+
+    # 認証ボタン
+    if st.button("認証する"):
+        if input_room_id:  # 入力が空でない場合のみ
+            try:
+                response = requests.get(ROOM_LIST_URL, timeout=5)
+                response.raise_for_status()
+                room_df = pd.read_csv(io.StringIO(response.text), header=None)
+
+                valid_codes = set(str(x).strip() for x in room_df.iloc[:, 0].dropna())
+
+                # ✅ 特別認証コード「mksp154851」なら全ルーム利用可
+                if input_room_id.strip() == "mksp154851":
+                    st.session_state.authenticated = True
+                    st.session_state.is_master_access = True  # フラグを立てる
+                    st.success("✅ 特別認証モード（全ルーム対応）でログ取得が可能です。")
+                    st.rerun()
+
+                elif input_room_id.strip() in valid_codes:
+                    st.session_state.authenticated = True
+                    st.session_state.is_master_access = False
+                    st.success("✅ 認証に成功しました。ツールを利用できます。")
+                    st.rerun()
+
+                else:
+                    st.error("❌ 認証コードが無効です。正しい認証コードを入力してください。")
+            except Exception as e:
+                st.error(f"認証リストを取得できませんでした: {e}")
+        else:
+            st.warning("認証コードを入力してください。")
+
+    # 認証が終わるまで他のUIを描画しない
+    st.stop()
+# ▲▲ 認証ステップここまで ▲▲
+
+
+input_room_id = st.text_input("対象のルームIDを入力してください:", placeholder="例: 154851", key="target_room_id_input")
+
+# --- ボタンを縦並びに配置 ---
+if st.button("トラッキング開始", key="start_button"):
+    if input_room_id and input_room_id.isdigit():
+        room_list_df = get_room_list()
+        valid_ids = set(str(x) for x in room_list_df.iloc[:,0].dropna().astype(int))
+
+        # ✅ 特別認証モード（mksp154851）の場合はバイパス許可
+        if not st.session_state.get("is_master_access", False) and input_room_id not in valid_ids:
+            st.error("指定されたルームIDが見つからないか、認証されていないルームIDか、現在配信中ではありません。")
+        else:
+            st.session_state.is_tracking = True
+            st.session_state.room_id = input_room_id
+            st.session_state.comment_log = []
+            st.session_state.gift_log = []
+            st.session_state.gift_list_map = {}
+            st.session_state.fan_list = []
+            st.session_state.total_fan_count = 0
+            st.rerun()
+    else:
+        st.error("ルームIDを入力してください。")
+
+if st.button("トラッキング停止", key="stop_button", disabled=not st.session_state.is_tracking):
+    if st.session_state.is_tracking:
+        # コメント・ギフト共に共通フォーマットで保存
+        save_log_to_ftp("comment")
+        save_log_to_ftp("gift")
+
+    st.session_state.is_tracking = False
+    st.session_state.room_info = None
+    st.info("トラッキングを停止しました。")
+    st.rerun()
+
+
+if st.session_state.is_tracking:
+    onlives_data = get_onlives_rooms()
+    target_room_info = onlives_data.get(int(st.session_state.room_id)) if st.session_state.room_id.isdigit() else None
+
+    # --- 配信終了検知と自動保存処理 ---
+    is_live_now = int(st.session_state.room_id) in onlives_data
+
+    if not is_live_now:
+        st.warning("📡 配信が終了しました。ログを自動保存します。")
+
+        # コメントログ保存
+        if st.session_state.comment_log:
+            comment_df = pd.DataFrame([
+                {
+                    "コメント時間": datetime.datetime.fromtimestamp(log.get("created_at", 0), JST).strftime("%Y-%m-%d %H:%M:%S"),
+                    "ユーザー名": log.get("name", ""),
+                    "コメント内容": log.get("comment", ""),
+                    "ユーザーID": log.get("user_id", "")
+                }
+                for log in st.session_state.comment_log
+                if not any(keyword in log.get("name", "") or keyword in log.get("comment", "") for keyword in SYSTEM_COMMENT_KEYWORDS)
+            ])
+            buf = io.BytesIO()
+            comment_df.to_csv(buf, index=False, encoding="utf-8-sig")
+            upload_csv_to_ftp(f"comment_log_{st.session_state.room_id}_{datetime.datetime.now(JST).strftime('%Y%m%d_%H%M%S')}.csv", buf)
+
+        # ギフトログ保存
+        if st.session_state.gift_log:
+            gift_df = pd.DataFrame([
+                {
+                    "ギフト時間": datetime.datetime.fromtimestamp(log.get("created_at", 0), JST).strftime("%Y-%m-%d %H:%M:%S"),
+                    "ユーザー名": log.get("name", ""),
+                    "ギフト名": st.session_state.gift_list_map.get(str(log.get("gift_id")), {}).get("name", ""),
+                    "個数": log.get("num", ""),
+                    "ポイント": st.session_state.gift_list_map.get(str(log.get("gift_id")), {}).get("point", 0),
+                    "ユーザーID": log.get("user_id", "")
+                }
+                for log in st.session_state.gift_log
+            ])
+            buf = io.BytesIO()
+            gift_df.to_csv(buf, index=False, encoding="utf-8-sig")
+            upload_csv_to_ftp(f"gift_log_{st.session_state.room_id}_{datetime.datetime.now(JST).strftime('%Y%m%d_%H%M%S')}.csv", buf)
+
+        # 状態変更とリロード
+        st.session_state.is_tracking = False
+        st.info("✅ 配信終了を検知し、自動保存・トラッキング停止しました。")
+        st.rerun()
+
+
+    if target_room_info:
+        room_id = st.session_state.room_id
+        # ルーム名取得
+        try:
+            prof = requests.get(f"https://www.showroom-live.com/api/room/profile?room_id={room_id}", headers=HEADERS, timeout=5).json()
+            room_name = prof.get("room_name", f"ルームID {room_id}")
+        except Exception:
+            room_name = f"ルームID {room_id}"
+        # URLキー取得
+        room_url_key = prof.get("room_url_key", "")
+        room_url = f"https://www.showroom-live.com/r/{room_url_key}" if room_url_key else f"https://www.showroom-live.com/room/profile?room_id={room_id}"
+        link_html = f'<a href="{room_url}" target="_blank" style="font-weight:bold; text-decoration:underline; color:inherit;">{room_name}</a>'
+        st.markdown(f'<div class="tracking-success">{link_html} の配信をトラッキング中です！</div>', unsafe_allow_html=True)
+
+        st_autorefresh(interval=7000, limit=None, key="dashboard_refresh")
+        st.session_state.comment_log = get_and_update_log("comment", st.session_state.room_id)
+        st.session_state.gift_log = get_and_update_log("gift", st.session_state.room_id)
+        import math
+
+        # コメントログ自動保存
+        prev_comment_count = st.session_state.get("prev_comment_count", 0)
+        current_comment_count = len(st.session_state.comment_log)
+
+        # 💡 修正後の保存しきい値: prev_comment_countを次の100の倍数に丸めた値
+        # 例: prev_countが105の場合、次の保存しきい値は200
+        # 例: prev_countが100の場合、次の保存しきい値は200
+        next_save_threshold = math.ceil((prev_comment_count + 1) / 100) * 100
+
+        # 🌟 条件判定: 現在の総数が次の100の倍数のしきい値以上になったら保存
+        if current_comment_count >= next_save_threshold:
+            if current_comment_count > 0:
+                comment_df = pd.DataFrame([
+                    # ... DataFrame生成の処理は省略 ...
+                    # 既存のコードのまま、全ログをDataFrameに変換
+                    {
+                        "コメント時間": datetime.datetime.fromtimestamp(log.get("created_at", 0), JST).strftime("%Y-%m-%d %H:%M:%S"),
+                        "ユーザー名": log.get("name", ""),
+                        "コメント内容": log.get("comment", ""),
+                        "ユーザーID": log.get("user_id", "")
+                    }
+                    for log in st.session_state.comment_log
+                    if not any(keyword in log.get("name", "") or keyword in log.get("comment", "") for keyword in SYSTEM_COMMENT_KEYWORDS)
+                ])
+                
+                buf = io.BytesIO()
+                comment_df.to_csv(buf, index=False, encoding="utf-8-sig")
+                upload_csv_to_ftp(f"comment_log_{st.session_state.room_id}_{datetime.datetime.now(JST).strftime('%Y%m%d_%H%M%S')}.csv", buf)
+                
+                # 🌟 変更点: 次に保存すべき件数 (100の倍数) に更新する
+                # ここで `current_comment_count` ではなく `next_save_threshold` を使用
+                st.session_state.prev_comment_count = next_save_threshold
+
+        import math # mathモジュールをインポートしてください
+
+        # ギフトログ自動保存
+        prev_gift_count = st.session_state.get("prev_gift_count", 0)
+        current_gift_count = len(st.session_state.gift_log)
+
+        # 🌟 修正点1: 次に保存を実行すべき100の倍数を計算
+        # 例: prev_gift_countが105の場合、next_save_thresholdは200になる
+        next_save_threshold = math.ceil((prev_gift_count + 1) / 100) * 100
+
+        # 🌟 修正点2: 条件判定を次の100の倍数に達したかどうかに変更
+        if current_gift_count >= next_save_threshold:
+            if current_gift_count > 0:
+                gift_df = pd.DataFrame([
+                    {
+                        "ギフト時間": datetime.datetime.fromtimestamp(log.get("created_at", 0), JST).strftime("%Y-%m-%d %H:%M:%S"),
+                        "ユーザー名": log.get("name", ""),
+                        "ギフト名": st.session_state.gift_list_map.get(str(log.get("gift_id")), {}).get("name", ""),
+                        "個数": log.get("num", ""),
+                        "ポイント": st.session_state.gift_list_map.get(str(log.get("gift_id")), {}).get("point", 0),
+                        "ユーザーID": log.get("user_id", "")
+                    }
+                    for log in st.session_state.gift_log
+                ])
+                
+                buf = io.BytesIO()
+                gift_df.to_csv(buf, index=False, encoding="utf-8-sig")
+                upload_csv_to_ftp(f"gift_log_{st.session_state.room_id}_{datetime.datetime.now(JST).strftime('%Y%m%d_%H%M%S')}.csv", buf)
+                
+                # 🌟 修正点3: prev_gift_countを、実際に保存したときの総数ではなく、
+                # 次の保存しきい値（100の倍数）に強制的に更新する
+                st.session_state.prev_gift_count = next_save_threshold
+
+        #auto_backup_if_needed()
+        st.session_state.gift_list_map = get_gift_list(st.session_state.room_id)
+        fan_list, total_fan_count = get_fan_list(st.session_state.room_id)
+        st.session_state.fan_list = fan_list
+        st.session_state.total_fan_count = total_fan_count
+
+        st.markdown("---")
+        st.markdown("<h2 style='font-size:2em;'>📊 リアルタイムダッシュボード</h2>", unsafe_allow_html=True)
+        st.markdown(f"**最終更新日時 (日本時間): {datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')}**")
+        st.markdown(f"<p style='font-size:12px; color:#a1a1a1;'>※約7秒ごとに自動更新されます。</p>", unsafe_allow_html=True)
+
+        col_comment, col_gift, col_fan = st.columns(3)
+        with col_comment:
+            st.markdown("### 📝 コメント")
+            with st.container(border=True, height=500):
+                filtered_comments = [
+                    log for log in st.session_state.comment_log 
+                    if not any(keyword in log.get('name', '') or keyword in log.get('comment', '') for keyword in SYSTEM_COMMENT_KEYWORDS)
+                ]
+                if filtered_comments:
+                    for log in filtered_comments:
+                        user_name = log.get('name', '匿名ユーザー')
+                        comment_text = log.get('comment', '')
+                        created_at = datetime.datetime.fromtimestamp(log.get('created_at', 0), JST).strftime("%H:%M:%S")
+                        avatar_url = log.get('avatar_url', '')
+                        html = f"""
+                        <div class="comment-item">
+                            <div class="comment-item-row">
+                                <img src="{avatar_url}" class="comment-avatar" />
+                                <div class="comment-content">
+                                    <div class="comment-time">{created_at}</div>
+                                    <div class="comment-user">{user_name}</div>
+                                    <div class="comment-text">{comment_text}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <hr style="border: none; border-top: 1px solid #eee; margin: 8px 0;">
+                        """
+                        st.markdown(html, unsafe_allow_html=True)
+                else:
+                    st.info("コメントがありません。")
+        with col_gift:
+            st.markdown("### 🎁 スペシャルギフト")
+            with st.container(border=True, height=500):
+                if st.session_state.gift_log and st.session_state.gift_list_map:
+                    for log in st.session_state.gift_log:
+                        gift_info = st.session_state.gift_list_map.get(str(log.get('gift_id')), {})
+                        if not gift_info:
+                            continue
+                        user_name = log.get('name', '匿名ユーザー')
+                        created_at = datetime.datetime.fromtimestamp(log.get('created_at', 0), JST).strftime("%H:%M:%S")
+                        gift_point = gift_info.get('point', 0)
+                        gift_count = log.get('num', 0)
+                        total_point = gift_point * gift_count
+                        highlight_class = ""
+                        if total_point >= 300000: highlight_class = "highlight-300000"
+                        elif total_point >= 100000: highlight_class = "highlight-100000"
+                        elif total_point >= 60000: highlight_class = "highlight-60000"
+                        elif total_point >= 30000: highlight_class = "highlight-30000"
+                        elif total_point >= 10000: highlight_class = "highlight-10000"
+                        gift_image_url = log.get('image', gift_info.get('image', ''))
+                        avatar_id = log.get('avatar_id', None)
+                        avatar_url = f"https://static.showroom-live.com/image/avatar/{avatar_id}.png" if avatar_id else DEFAULT_AVATAR
+                        html = f"""
+                        <div class="gift-item {highlight_class}">
+                            <div class="gift-item-row">
+                                <img src="{avatar_url}" class="gift-avatar" />
+                                <div class="gift-content">
+                                    <div class="gift-time">{created_at}</div>
+                                    <div class="gift-user">{user_name}</div>
+                                    <div class="gift-info-row">
+                                        <img src="{gift_image_url}" class="gift-image" />
+                                        <span>×{gift_count}</span>
+                                    </div>
+                                    <div>{gift_point} pt</div>
+                                </div>
+                            </div>
+                        </div>
+                        <hr style="border: none; border-top: 1px solid #eee; margin: 8px 0;">
+                        """
+                        st.markdown(html, unsafe_allow_html=True)
+                else:
+                    st.info("ギフトがありません。")
+        with col_fan:
+            st.markdown("### 🏆 ファンリスト")
+            with st.container(border=True, height=500):
+                if st.session_state.fan_list:
+                    for fan in st.session_state.fan_list:
+                        html = f"""
+                        <div class="fan-item">
+                            <div class="fan-info-row">
+                                <img src="https://static.showroom-live.com/image/avatar/{fan.get('avatar_id', 0)}.png?v=108" class="fan-avatar" />
+                                <div>
+                                    <div class="fan-level">Lv. {fan.get('level', 0)}</div>
+                                    <div>{fan.get('user_name', '不明なユーザー')}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <hr style="border: none; border-top: 1px solid #eee; margin: 8px 0;">
+                        """
+                        st.markdown(html, unsafe_allow_html=True)
+                else:
+                    st.info("ファンデータがありません。")
+    else:
+        st.warning("指定されたルームIDが見つからないか、認証されていないルームIDか、現在配信中ではありません。")
+        st.session_state.is_tracking = False
+
+st.markdown("---")
+st.markdown("<h2 style='font-size:2em;'>📝 ログ詳細</h2>", unsafe_allow_html=True)
+st.markdown(f"<p style='font-size:12px; color:#a1a1a1;'>※データは現在{len(st.session_state.comment_log)}件のコメントと{len(st.session_state.gift_log)}件のスペシャルギフトと{st.session_state.total_fan_count}名のファンのデータが蓄積されています。<br />※誤ってリロード（再読み込み）してしまった、閉じてしまった等でダウンロードせずに消失してしまった場合、24時間以内に運営ご相談いただければ、復元・ログ取得できる可能性があります。</p>", unsafe_allow_html=True)
+#st.markdown(f"<p style='font-size:12px; color:#a1a1a1;'>※誤ってリロード（再読み込み）してしまった、閉じてしまった等でダウンロードせずに消失してしまった場合、24時間以内に運営ご相談いただければ、復元・ログ取得できる可能性があります。</p>", unsafe_allow_html=True)
+st.markdown("")
+
+comment_cols = ['コメント時間', 'ユーザー名', 'コメント内容', 'ユーザーID']
+gift_cols = ['ギフト時間', 'ユーザー名', 'ギフト名', '個数', 'ポイント', 'ユーザーID']
+fan_cols = ['順位', 'レベル', 'ユーザー名', 'ポイント', 'ユーザーID']
+
+# コメント一覧表
+filtered_comments_df = [
+    log for log in st.session_state.comment_log 
+    if not any(keyword in log.get('name', '') or keyword in log.get('comment', '') for keyword in SYSTEM_COMMENT_KEYWORDS)
+]
+if filtered_comments_df:
+    comment_df = pd.DataFrame(filtered_comments_df)
+    comment_df['created_at'] = pd.to_datetime(comment_df['created_at'], unit='s').dt.tz_localize('UTC').dt.tz_convert(JST).dt.strftime("%Y-%m-%d %H:%M:%S")
+    comment_df['user_id'] = [log.get('user_id', 'N/A') for log in filtered_comments_df]
+    comment_df = comment_df.rename(columns={
+        'name': 'ユーザー名', 'comment': 'コメント内容', 'created_at': 'コメント時間', 'user_id': 'ユーザーID'
+    })
+    st.markdown("### 📝 コメントログ一覧表")
+    st.dataframe(comment_df[comment_cols], use_container_width=True, hide_index=True)
     
-    # 画面表示用のヘッダーを「ライバー愛称」に変更
-    display_df = results_df.rename(columns={"ルーム名": "ライバー愛称"})
-    st.dataframe(display_df, use_container_width=True) 
-    
-    st.subheader("CSVダウンロード")
-    
-    # CSV出力はBOM付きUTF-8 (encoding='utf-8-sig') を使用
-    csv = results_df.to_csv(index=False, encoding='utf-8-sig') 
-    
+    buffer = io.BytesIO()
+    comment_df[comment_cols].to_csv(buffer, index=False, encoding='utf-8-sig')
+    buffer.seek(0)
     st.download_button(
-        label="📥 結果をCSVダウンロード",
-        data=csv,
-        file_name=f'showroom_liver_sales_estimate_{year}{month:02d}.csv',
-        mime='text/csv',
+        label="コメントログをCSVでダウンロード",
+        data=buffer,
+        file_name=f"comment_log_{st.session_state.room_id}_{datetime.datetime.now(JST).strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
+else:
+    st.info("ダウンロードできるコメントがありません。")
+
+st.markdown("---")
+
+# ギフト一覧表
+if st.session_state.gift_log:
+    gift_df = pd.DataFrame(st.session_state.gift_log)
+    gift_df['created_at'] = pd.to_datetime(gift_df['created_at'], unit='s').dt.tz_localize('UTC').dt.tz_convert(JST).dt.strftime("%Y-%m-%d %H:%M:%S")
+    
+    if st.session_state.gift_list_map:
+        gift_info_df = pd.DataFrame.from_dict(st.session_state.gift_list_map, orient='index')
+        gift_info_df.index = gift_info_df.index.astype(str)
+        
+        gift_df['gift_id'] = gift_df['gift_id'].astype(str)
+        gift_df = gift_df.set_index('gift_id').join(gift_info_df, on='gift_id', lsuffix='_user_data', rsuffix='_gift_info').reset_index()
+
+    gift_df = gift_df.rename(columns={
+        'name_user_data': 'ユーザー名', 'name_gift_info': 'ギフト名', 'num': '個数', 'point': 'ポイント', 'created_at': 'ギフト時間', 'user_id': 'ユーザーID'
+    })
+    st.markdown("### 🎁 スペシャルギフトログ一覧表")
+    st.dataframe(gift_df[gift_cols], use_container_width=True, hide_index=True)
+    
+    buffer = io.BytesIO()
+    gift_df[gift_cols].to_csv(buffer, index=False, encoding='utf-8-sig')
+    buffer.seek(0)
+    st.download_button(
+        label="スペシャルギフトログをCSVでダウンロード",
+        data=buffer,
+        file_name=f"gift_log_{st.session_state.room_id}_{datetime.datetime.now(JST).strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
+else:
+    st.info("ダウンロードできるスペシャルギフトがありません。")
+
+st.markdown("---")
+
+# ファンリスト一覧表
+if st.session_state.fan_list:
+    fan_df = pd.DataFrame(st.session_state.fan_list)
+    
+    rename_map = {'user_name': 'ユーザー名', 'level': 'レベル', 'point': 'ポイント', 'user_id': 'ユーザーID'}
+    if 'rank' in fan_df.columns:
+        rename_map['rank'] = '順位'
+    
+    fan_df = fan_df.rename(columns=rename_map)
+
+    final_fan_cols = [col for col in fan_cols if col in fan_df.columns]
+    
+    column_config = {
+        "順位": st.column_config.NumberColumn("順位", help="ファンランキングの順位", width="small"),
+        "レベル": st.column_config.NumberColumn("レベル", help="ファンレベル", width="small"),
+        "ユーザー名": st.column_config.TextColumn("ユーザー名", help="SHOWROOMのユーザー名", width="large"),
+        "ポイント": st.column_config.NumberColumn("ポイント", help="獲得ポイント", format="%d", width="medium"),
+        "ユーザーID": st.column_config.NumberColumn("ユーザーID", help="SHOWROOMのユーザーID", width="medium")
+    }
+    
+    st.markdown("### 🏆 ファンリスト一覧表")
+    st.dataframe(
+        fan_df[final_fan_cols], 
+        use_container_width=True, 
+        hide_index=True,
+        column_config=column_config
     )
     
-    st.markdown("---")
-
-
-if __name__ == "__main__":
-    main()
+    buffer = io.BytesIO()
+    fan_df[final_fan_cols].to_csv(buffer, index=False, encoding='utf-8-sig')
+    buffer.seek(0)
+    st.download_button(
+        label="ファンリストをCSVでダウンロード",
+        data=buffer,
+        file_name=f"fan_list_{st.session_state.room_id}_{datetime.datetime.now(JST).strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
+else:
+    st.info("ダウンロードできるファンデータがありません。")
