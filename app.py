@@ -253,11 +253,48 @@ def main():
         return
     
     st.markdown("---")
-    if st.button("🚀 データ処理を開始する", type="primary"):
+
+    # --- 【新規追加】データ更新チェック項目 ---
+    st.markdown("#### 2. データ更新状況のチェック（処理開始の必須条件）")
+    
+    # チェックボックスの状態をセッションステートに保持
+    if 'check1' not in st.session_state:
+        st.session_state.check1 = False
+    if 'check2' not in st.session_state:
+        st.session_state.check2 = False
+    if 'check3' not in st.session_state:
+        st.session_state.check3 = False
+    if 'check4' not in st.session_state:
+        st.session_state.check4 = False
+
+    # チェックボックスの表示
+    st.markdown("以下のファイルが**最新の状態**であることを確認してください。")
+    check1 = st.checkbox(f"① 管理ライバーリスト（`{LIVER_LIST_URL.split('/')[-1]}`）が最新状態か", key='check1')
+    check2 = st.checkbox(f"② ルームリスト（`{ROOM_LIST_URL.split('/')[-1]}`）が最新状態か", key='check2')
+    check3 = st.checkbox(f"③ 処理月（{selected_display_month}分）のKPIデータが最新状態か", key='check3')
+    
+    # 複数の売上ファイルをまとめてチェック
+    sales_file_names = [
+        SALES_DATA_URL.split('/')[-1],
+        PAID_LIVE_URL.split('/')[-1],
+        TIME_CHARGE_URL.split('/')[-1]
+    ]
+    check4 = st.checkbox(f"④ 処理月（{selected_display_month}分）の各種売上データが最新状態か (ファイル例: {sales_file_names[0]} 他)", key='check4')
+
+    # 全てのチェックボックスがTrueであるかを確認
+    all_checked = check1 and check2 and check3 and check4
+    
+    st.markdown("---")
+    
+    # ボタンの有効/無効を制御
+    if st.button("🚀 データ処理を開始する", type="primary", disabled=not all_checked):
         # ボタンを押すたびに、process_data内からload_dataが実行され、常に最新データが取得されます。
         process_data(year, month, delivery_month_str, payment_month_str)
+    elif not all_checked:
+        st.warning("処理を開始するには、上記の**全てのデータチェック項目にチェック**を入れてください。")
     else:
         st.info(f"選択された配信月: **{selected_display_month}**。処理を開始するには上記のボタンを押してください。")
+    
     st.markdown("---")
 
 
