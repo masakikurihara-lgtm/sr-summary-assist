@@ -6,7 +6,8 @@ from dateutil.relativedelta import relativedelta
 
 
 # --- ページ設定 ---
-st.set_set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整理ツール")
+# 【修正箇所】: st.set_set_page_config を st.set_page_config に修正
+st.set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整理ツール")
 
 
 # --- 定数（URL） ---
@@ -438,10 +439,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     
     st.subheader("CSVダウンロード")
     
-    # ---------------------------------------------
-    # 【修正箇所】CSV出力はヘッダー名「ルーム名」のまま、encoding='utf-8-sig' (BOM付きUTF-8) を指定
+    # CSV出力はBOM付きUTF-8 (encoding='utf-8-sig') を使用
     csv = results_df.to_csv(index=False, encoding='utf-8-sig') 
-    # ---------------------------------------------
     
     st.download_button(
         label="📥 結果をCSVダウンロード",
