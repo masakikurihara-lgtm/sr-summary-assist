@@ -16,6 +16,8 @@ ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
 SALES_DATA_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_with_mixed_rate_csv_donwload_for_room.csv"
 # プレミアムライブ分配額データURL
 PAID_LIVE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/paid_live_hist_invoice_format.csv"
+# タイムチャージ分配額データURL
+TIME_CHARGE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/show_rank_time_charge_hist_invoice_format.csv"
 
 
 ## データの準備・読み込み関数
@@ -150,7 +152,7 @@ def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
         if rate is None:
             return "#ERROR_RANK"
 
-        # 計算式の適用
+        # 計算式の適用: ($individualRevenue * 1.08 * $rate) / 1.10 * 1.10
         payment_estimate = (individual_revenue * 1.08 * rate) / 1.10 * 1.10
         
         # 結果を小数点以下を四捨五入して整数に丸める
@@ -173,7 +175,6 @@ def calculate_paid_live_payment_estimate(paid_live_amount_str):
         individual_revenue = float(paid_live_amount_str)
         
         # 計算式の適用: ($individualRevenue * 1.00 * 1.08 * 0.9) / 1.10 * 1.10
-        # 1.00 は乗算に影響しない
         payment_estimate = (individual_revenue * 1.08 * 0.9) / 1.10 * 1.10
         
         # 結果を小数点以下を四捨五入して整数に丸める
@@ -182,6 +183,27 @@ def calculate_paid_live_payment_estimate(paid_live_amount_str):
     except ValueError:
         return "#ERROR_CALC"
 
+# --- タイムチャージ支払想定額計算関数 ---
+def calculate_time_charge_payment_estimate(time_charge_amount_str):
+    """
+    タイムチャージ分配額から支払想定額を計算する
+    """
+    # タイムチャージ分配額がない場合はブランクを返す
+    if time_charge_amount_str == "" or time_charge_amount_str == "#N/A":
+        return ""
+
+    try:
+        # 分配額を数値に変換
+        individual_revenue = float(time_charge_amount_str)
+        
+        # 計算式の適用: ($individualRevenue * 1.08 * 1.00) / 1.10 * 1.10
+        payment_estimate = (individual_revenue * 1.08 * 1.00) / 1.10 * 1.10
+        
+        # 結果を小数点以下を四捨五入して整数に丸める
+        return str(round(payment_estimate))
+
+    except ValueError:
+        return "#ERROR_CALC"
 
 ## メインアプリケーション
 def main():
@@ -319,7 +341,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             paid_live_keys = paid_live_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
             paid_live_values = paid_live_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
             
-            # 【修正済み】1行目（全体合計）をスキップしない (paid_live_values.values, paid_live_keys)
+            # 1行目からライバーデータ
             account_id_to_paid_live_map = pd.Series(paid_live_values.values, index=paid_live_keys).to_dict()
             st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
 
@@ -329,6 +351,26 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                     room_id_to_paid_live_map[room_id] = account_id_to_paid_live_map[account_id]
         else:
             st.error("プレミアムライブ分配額CSVの読み込みまたは構成に問題があります。")
+
+        # 2.6. 【新規】タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format.csv)
+        st.subheader("タイムチャージ分配額データの読み込み")
+        time_charge_df = load_data(TIME_CHARGE_URL, "タイムチャージ分配額データ", header=None)
+        
+        room_id_to_time_charge_map = {}
+        if time_charge_df is not None and time_charge_df.shape[1] >= 2:
+            time_charge_keys = time_charge_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
+            time_charge_values = time_charge_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
+            
+            # 1行目からライバーデータ
+            account_id_to_time_charge_map = pd.Series(time_charge_values.values, index=time_charge_keys).to_dict()
+            st.success(f"タイムチャージ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_time_charge_map)}**")
+
+            # ルームIDに対する最終分配額マッピングを作成
+            for account_id, room_id in account_id_to_room_id_map.items():
+                if account_id in account_id_to_time_charge_map:
+                    room_id_to_time_charge_map[room_id] = account_id_to_time_charge_map[account_id]
+        else:
+            st.error("タイムチャージ分配額CSVの読み込みまたは構成に問題があります。")
         
         
         # 3. 配信有無と売上分配額の突き合わせと結果生成
@@ -339,19 +381,19 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         for room_id in liver_ids:
             liver_alias = liver_alias_map.get(room_id, "愛称不明") 
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
+            
+            # ルーム売上
             sales_amount = room_id_to_sales_map.get(room_id, "#N/A")
-            
-            # 個別ランクの判定
             individual_rank = get_individual_rank(sales_amount)
-            
-            # ルーム売上支払想定額の計算
             payment_estimate = calculate_payment_estimate(individual_rank, mk_rank, sales_amount)
             
-            # プレミアムライブ分配額の取得
+            # プレミアムライブ
             paid_live_amount = room_id_to_paid_live_map.get(room_id, "")
-            
-            # 【新規】プレミアムライブ支払想定額の計算
             paid_live_payment_estimate = calculate_paid_live_payment_estimate(paid_live_amount)
+            
+            # 【新規】タイムチャージ
+            time_charge_amount = room_id_to_time_charge_map.get(room_id, "")
+            time_charge_payment_estimate = calculate_time_charge_payment_estimate(time_charge_amount)
                 
             results.append({
                 "ルームID": room_id,
@@ -363,7 +405,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                 "個別ランク": individual_rank,
                 "ルーム売上支払想定額": payment_estimate, 
                 "プレミアムライブ分配額": paid_live_amount, 
-                "プレミアムライブ支払想定額": paid_live_payment_estimate, # 【新規】追加
+                "プレミアムライブ支払想定額": paid_live_payment_estimate, 
+                "タイムチャージ支払想定額": time_charge_payment_estimate, # 【新規】追加
             })
 
         results_df = pd.DataFrame(results)
@@ -379,8 +422,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             "個別ランク", 
             "ルーム売上支払想定額", 
             "プレミアムライブ分配額", 
-            "プレミアムライブ支払想定額", # 確定
-            # 今後ここに新しい項目を追加していく
+            "プレミアムライブ支払想定額", 
+            "タイムチャージ支払想定額", # 確定
         ]
         
         final_columns = [col for col in column_order if col in results_df.columns]
