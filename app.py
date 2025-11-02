@@ -6,7 +6,7 @@ from dateutil.relativedelta import relativedelta
 
 
 # --- ページ設定 ---
-st.set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整理ツール")
+st.set_set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整理ツール")
 
 
 # --- 定数（URL） ---
@@ -25,6 +25,7 @@ TIME_CHARGE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/show_rank_tim
 def load_data(url, name="データ", header='infer'):
     """URLからCSVを読み込み、DataFrameとして返す"""
     try:
+        # データの読み込みは文字コードの問題が起きにくいため、標準のまま
         df = pd.read_csv(url, header=header) 
         return df
     except Exception as e:
@@ -321,7 +322,6 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             # 1行目の全体分配額合計を除く
             # sales_values[1:].values と sales_keys[1:] で1行目をスキップ
             account_id_to_sales_map = pd.Series(sales_values[1:].values, index=sales_keys[1:]).to_dict()
-            st.success(f"個別売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
             
             # ルームIDに紐づける
             for account_id, room_id in account_id_to_room_id_map.items():
@@ -330,6 +330,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         else:
             st.error("売上分配額CSVに分配額（1列目）またはアカウントID（2列目）が見つかりません。")
             account_id_to_sales_map = {}
+        st.success(f"個別売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
         
         
         # 2.5. プレミアムライブ分配額データの読み込み (paid_live_hist_invoice_format.csv)
@@ -343,16 +344,14 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             
             # 1行目からライバーデータ
             account_id_to_paid_live_map = pd.Series(paid_live_values.values, index=paid_live_keys).to_dict()
-            st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
 
             # ルームIDに対する最終分配額マッピングを作成
             for account_id, room_id in account_id_to_room_id_map.items():
                 if account_id in account_id_to_paid_live_map:
                     room_id_to_paid_live_map[room_id] = account_id_to_paid_live_map[account_id]
-        else:
-            st.error("プレミアムライブ分配額CSVの読み込みまたは構成に問題があります。")
-
-        # 2.6. 【新規】タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format.csv)
+        st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
+        
+        # 2.6. タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format.csv)
         st.subheader("タイムチャージ分配額データの読み込み")
         time_charge_df = load_data(TIME_CHARGE_URL, "タイムチャージ分配額データ", header=None)
         
@@ -363,15 +362,13 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             
             # 1行目からライバーデータ
             account_id_to_time_charge_map = pd.Series(time_charge_values.values, index=time_charge_keys).to_dict()
-            st.success(f"タイムチャージ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_time_charge_map)}**")
 
             # ルームIDに対する最終分配額マッピングを作成
             for account_id, room_id in account_id_to_room_id_map.items():
                 if account_id in account_id_to_time_charge_map:
                     room_id_to_time_charge_map[room_id] = account_id_to_time_charge_map[account_id]
-        else:
-            st.error("タイムチャージ分配額CSVの読み込みまたは構成に問題があります。")
-        
+        st.success(f"タイムチャージ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_time_charge_map)}**")
+
         
         # 3. 配信有無と売上分配額の突き合わせと結果生成
         st.header("3. 結果生成")
@@ -391,7 +388,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             paid_live_amount = room_id_to_paid_live_map.get(room_id, "")
             paid_live_payment_estimate = calculate_paid_live_payment_estimate(paid_live_amount)
             
-            # 【新規】タイムチャージ
+            # タイムチャージ
             time_charge_amount = room_id_to_time_charge_map.get(room_id, "")
             time_charge_payment_estimate = calculate_time_charge_payment_estimate(time_charge_amount)
                 
@@ -406,12 +403,12 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                 "ルーム売上支払想定額": payment_estimate, 
                 "プレミアムライブ分配額": paid_live_amount, 
                 "プレミアムライブ支払想定額": paid_live_payment_estimate, 
-                "タイムチャージ支払想定額": time_charge_payment_estimate, # 【新規】追加
+                "タイムチャージ支払想定額": time_charge_payment_estimate, 
             })
 
         results_df = pd.DataFrame(results)
 
-        # 結果の列順序を明示的に指定（新しい項目は常に右端に追加）
+        # 結果の列順序を明示的に指定
         column_order = [
             "ルームID",
             "ルーム名",
@@ -423,7 +420,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             "ルーム売上支払想定額", 
             "プレミアムライブ分配額", 
             "プレミアムライブ支払想定額", 
-            "タイムチャージ支払想定額", # 確定
+            "タイムチャージ支払想定額", 
         ]
         
         final_columns = [col for col in column_order if col in results_df.columns]
@@ -441,8 +438,10 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     
     st.subheader("CSVダウンロード")
     
-    # CSV出力はヘッダー名「ルーム名」のまま
+    # ---------------------------------------------
+    # 【修正箇所】CSV出力はヘッダー名「ルーム名」のまま、encoding='utf-8-sig' (BOM付きUTF-8) を指定
     csv = results_df.to_csv(index=False, encoding='utf-8-sig') 
+    # ---------------------------------------------
     
     st.download_button(
         label="📥 結果をCSVダウンロード",
