@@ -11,18 +11,19 @@ st.set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整�
 
 # --- 定数（URL） ---
 KPI_DATA_BASE_URL = "https://mksoul-pro.com/showroom/csv/{year}-{month:02d}_all_all.csv"
-# 管理ライバーリスト（1列目:ID, 2列目:ライバー愛称）
 LIVER_LIST_URL = "https://mksoul-pro.com/showroom/file/m-liver-list.csv"
-# ルーム名一覧（今回は使用しません）
-ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv" 
+ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
+# ルーム売上分配額データURL
+SALES_DATA_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_with_mixed_rate_csv_donwload_for_room.csv"
 
 
 ## データの準備・読み込み関数
 @st.cache_data
-def load_data(url, name="データ"):
-    """URLからCSVを読み込み、DataFrameとして返す（ヘッダーあり前提）"""
+def load_data(url, name="データ", header='infer'):
+    """URLからCSVを読み込み、DataFrameとして返す"""
     try:
-        df = pd.read_csv(url) 
+        # header='infer'でヘッダーあり、header=Noneでヘッダーなし
+        df = pd.read_csv(url, header=header) 
         return df
     except Exception as e:
         st.error(f"{name}の読み込みに失敗しました: {url}\nエラー: {e}")
@@ -45,7 +46,7 @@ def get_processed_months():
 
 ## メインアプリケーション
 def main():
-    st.title("🎤 SHOWROOMライバーデータ整理ツール (配信有無チェック)")
+    st.title("🎤 SHOWROOMライバーデータ整理ツール (配信有無 & 売上チェック)")
 
     st.header("1. 処理月の選択と実行")
     
@@ -84,28 +85,20 @@ def main():
 # データ処理のメインロジック (ボタンが押されたときのみ実行)
 def process_data(year, month, delivery_month_str, payment_month_str):
     
-    with st.spinner("データを読み込み、配信有無をチェックしています..."):
+    with st.spinner("データを読み込み、配信有無と売上をチェックしています..."):
         
-        # 2. データの読み込みとマッピング
+        # --- 2. データの読み込みとマッピング ---
         
         # 2.1. 管理ライバーリストの読み込み (m-liver-list.csv)
         st.subheader("管理ライバーリストの読み込みと愛称マッピングの作成")
         liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
         if liver_df is None: return
         
-        # 1列目 (ID) と 2列目 (ライバー愛称) の両方を使用
         if liver_df.shape[1] >= 2:
-            
-            # 1列目 (ID) をキーに、2列目 (ライバー愛称) を値として辞書を作成
             df_keys = liver_df.iloc[:, 0].astype(str).str.strip()
             df_values = liver_df.iloc[:, 1].astype(str).str.strip() 
-            
-            # ルームIDと愛称の辞書
             liver_alias_map = pd.Series(df_values.values, index=df_keys).to_dict()
-            
-            # IDリストも1列目から抽出
             liver_ids = df_keys.tolist()
-            
             st.success(f"管理ライバーのルームIDリスト（1列目）と愛称（2列目）を読み込みました。件数: **{len(liver_ids)}**")
         else:
             st.error("管理ライバーリストCSVにデータ（1列目:ID, 2列目:愛称）が見つかりません。")
@@ -117,28 +110,71 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ")
         if kpi_df is None: return
 
-        # 2列目（ルームID）のデータを取得し、Setに変換
         if kpi_df.shape[1] > 1:
             kpi_room_ids = set(kpi_df.iloc[:, 1].astype(str).str.strip().tolist())
             st.success(f"配信があったルーム件数: **{len(kpi_room_ids)}** (KPIデータは2列目のIDを使用)")
         else:
             st.error("KPIデータCSVに配信ルームID（2列目）が見つかりません。")
             return
+            
+        # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用
+        st.subheader("ルームIDとアカウントIDの紐づけ")
+        room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
+        if room_list_df is None: return
 
-        # 3. 配信有無の突き合わせと結果生成
-        st.header("3. 配信有無の結果生成")
+        # 1列目 (ルームID) と 4列目 (アカウントID) のマッピングを作成
+        if room_list_df.shape[1] >= 4:
+            # アカウントIDをキー、ルームIDを値とする辞書を作成
+            # 1列目 (ID) を値、4列目 (アカウントID) をキー
+            account_id_to_room_id_map = room_list_df.set_index(room_list_df.columns[3].astype(str).str.strip()).iloc[:, 0].astype(str).str.strip().to_dict()
+            st.success("ルームIDとアカウントIDのマッピングを作成しました。")
+        else:
+            st.error("ルーム名リストCSVにアカウントID（4列目）が見つかりません。売上分配額の紐づけをスキップします。")
+            account_id_to_room_id_map = {}
+            
+        # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room.csv)
+        st.subheader("ルーム売上分配額データの読み込み")
+        # ヘッダーなし (header=None) で読み込む
+        sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None)
+        if sales_df is None: return
+        
+        # 1列目 (分配額) と 2列目 (アカウントID) を使用
+        if sales_df.shape[1] >= 2:
+            # アカウントIDをキー、分配額を値とする辞書を作成
+            # 1列目 (分配額) を値、2列目 (アカウントID) をキー
+            sales_df.iloc[:, 1] = sales_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
+            sales_df.iloc[:, 0] = sales_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
+            
+            account_id_to_sales_map = sales_df.set_index(sales_df.columns[1]).iloc[:, 0].to_dict()
+            st.success(f"売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
+        else:
+            st.error("売上分配額CSVに分配額（1列目）またはアカウントID（2列目）が見つかりません。")
+            account_id_to_sales_map = {}
+            
+        # 2.5. ルームIDに対する最終分配額マッピングを作成
+        room_id_to_sales_map = {}
+        for account_id, room_id in account_id_to_room_id_map.items():
+            if account_id in account_id_to_sales_map:
+                # アカウントIDに紐づく分配額が存在する場合
+                room_id_to_sales_map[room_id] = account_id_to_sales_map[account_id]
+        
+        # 3. 配信有無と売上分配額の突き合わせと結果生成
+        st.header("3. 結果生成")
         
         results = []
         
         for room_id in liver_ids:
-            # 2列目のライバー愛称を取得
             liver_alias = liver_alias_map.get(room_id, "愛称不明") 
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
+            
+            # ルーム売上分配額の取得。データがない場合は「#N/A」を設定。
+            sales_amount = room_id_to_sales_map.get(room_id, "#N/A")
                 
             results.append({
                 "ルームID": room_id,
-                "ルーム名": liver_alias, # ライバー愛称を「ルーム名」列として出力
+                "ルーム名": liver_alias, # ライバー愛称を表示
                 "配信有無": has_stream,
+                "ルーム売上分配額": sales_amount,
                 "配信月": delivery_month_str,
                 "支払月": payment_month_str
             })
@@ -150,24 +186,23 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     # 4. 結果の表示とCSVダウンロード
     st.header("4. 結果リスト")
     
-    # 列名を変更して表示（CSV出力のヘッダーは「ルーム名」のまま維持）
+    # 画面表示用のヘッダーを「ライバー愛称」に変更
     display_df = results_df.rename(columns={"ルーム名": "ライバー愛称"})
     st.dataframe(display_df, use_container_width=True) 
     
     st.subheader("CSVダウンロード")
     
-    # CSV出力はヘッダー名「ルーム名」のままとします
+    # CSV出力はヘッダー名「ルーム名」のまま
     csv = results_df.to_csv(index=False, encoding='utf-8-sig') 
     
     st.download_button(
         label="📥 結果をCSVダウンロード",
         data=csv,
-        file_name=f'showroom_liver_stream_check_{year}{month:02d}.csv',
+        file_name=f'showroom_liver_stream_sales_check_{year}{month:02d}.csv',
         mime='text/csv',
     )
     
     st.markdown("---")
-    st.info("💡 **次のステップについて**\n\nこの修正で、ルーム名が**ライバー愛称**（`m-liver-list.csv` の2列目）に置き換わりました。次は**売上データ**を取り込み、残りの目標項目を完成させましょう。")
 
 
 if __name__ == "__main__":
