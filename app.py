@@ -14,11 +14,15 @@ st.set_page_config(layout="wide", page_title="SHOWROOM 月初サマリー作成�
 KPI_DATA_BASE_URL = "https://mksoul-pro.com/showroom/csv/{year}-{month:02d}_all_all.csv"
 LIVER_LIST_URL = "https://mksoul-pro.com/showroom/file/m-liver-list.csv"
 ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
-SALES_DATA_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_with_mixed_rate_csv_donwload_for_room.csv"
+
+# 【修正箇所】 固定ファイルURLから、処理月（{year}{month:02d}）を挿入する動的ベースURLへ変更
+
+# ルーム売上分配額データURL
+SALES_DATA_BASE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_with_mixed_rate_csv_donwload_for_room_{year}{month:02d}.csv"
 # プレミアムライブ分配額データURL
-PAID_LIVE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/paid_live_hist_invoice_format.csv"
+PAID_LIVE_BASE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/paid_live_hist_invoice_format_{year}{month:02d}.csv"
 # タイムチャージ分配額データURL
-TIME_CHARGE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/show_rank_time_charge_hist_invoice_format.csv"
+TIME_CHARGE_BASE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/show_rank_time_charge_hist_invoice_format_{year}{month:02d}.csv"
 
 
 ## データの準備・読み込み関数
@@ -259,6 +263,9 @@ def main():
         # 表示用の "2025年10月" の文字列を作成
         display_month_text = f"{year}年{month:02d}月"
         
+        # ファイル名に使う "202510" の文字列を作成
+        file_month_suffix = f"{year}{month:02d}"
+
         delivery_month_str = f"{year}/{month:02d}"
         payment_date = datetime.date(year, month, 1) + relativedelta(months=2)
         payment_month_str = f"{payment_date.year}/{payment_date.month:02d}"
@@ -269,7 +276,7 @@ def main():
     
     st.markdown("---")
 
-    # --- 【新規追加】データ更新チェック項目 ---
+    # --- データ更新チェック項目 ---
     st.markdown("#### 2. データ更新状況のチェック（処理開始の必須条件）")
     
     # チェックボックスの状態をセッションステートに保持（on_changeでリセットされる）
@@ -287,17 +294,20 @@ def main():
     check1 = st.checkbox(f"① 管理ライバーリスト（`{LIVER_LIST_URL.split('/')[-1]}`）が最新状態か", key='check1')
     check2 = st.checkbox(f"② ルームリスト（`{ROOM_LIST_URL.split('/')[-1]}`）が最新状態か", key='check2')
     
-    # 【修正 2/2】 チェック項目③のテキストから「分」を削除
-    check3 = st.checkbox(f"③ 処理月（{display_month_text}）のKPIデータが最新状態か", key='check3')
+    # チェック項目③のテキストから「分」を削除
+    # KPIデータは `2025-10_all_all.csv` の形式で、選択された月がURLに含まれるため、ファイル名を表示。
+    kpi_file_name = KPI_DATA_BASE_URL.format(year=year, month=month).split('/')[-1]
+    check3 = st.checkbox(f"③ 処理月（{display_month_text}）のKPIデータ（`{kpi_file_name}`）が最新状態か", key='check3')
     
     # 複数の売上ファイルをまとめてチェック
+    # 【修正箇所】 動的なファイル名を取得
     sales_file_names = [
-        SALES_DATA_URL.split('/')[-1],
-        PAID_LIVE_URL.split('/')[-1],
-        TIME_CHARGE_URL.split('/')[-1]
+        SALES_DATA_BASE_URL.format(year=year, month=month).split('/')[-1],
+        PAID_LIVE_BASE_URL.format(year=year, month=month).split('/')[-1],
+        TIME_CHARGE_BASE_URL.format(year=year, month=month).split('/')[-1]
     ]
-    # 【修正 2/2】 チェック項目④のテキストから「分」を削除
-    check4 = st.checkbox(f"④ 処理月（{display_month_text}）の各種売上データが最新状態か (ファイル例: {sales_file_names[0]} 他)", key='check4')
+    # チェック項目④のテキストから「分」を削除し、ファイル名を動的に表示
+    check4 = st.checkbox(f"④ 処理月（{display_month_text}）の各種売上データが最新状態か (ファイル例: `{sales_file_names[0]}` 他)", key='check4')
 
     # 全てのチェックボックスがTrueであるかを確認
     all_checked = check1 and check2 and check3 and check4
@@ -311,7 +321,7 @@ def main():
     elif not all_checked:
         st.warning("処理を開始するには、上記の**全てのデータチェック項目にチェック**を入れてください。")
     else:
-        # 【修正 2/2】 表示テキストから「分」を削除した display_month_text を使用
+        # 表示テキストから「分」を削除した display_month_text を使用
         st.info(f"選択された配信月: **{display_month_text}分**。処理を開始するには上記のボタンを押してください。")
     
     st.markdown("---")
@@ -325,9 +335,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         # --- 2. データの読み込みとマッピング ---
         
         # 2.1. 管理ライバーリストの読み込み (m-liver-list.csv)
-        #st.subheader("管理ライバーリストの読み込みと愛称マッピングの作成")
         st.markdown(f"##### 管理ライバーリストの読み込みと愛称マッピングの作成")
-        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
         if liver_df is None: return
         
@@ -342,10 +350,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             return
         
         # 2.2. KPIデータ（配信有無）の読み込み (YYYY-MM_all_all.csv)
-        #st.subheader(f"{year}年{month:02d}月分のKPIデータの読み込み")
         st.markdown(f"##### {year}年{month:02d}月分のKPIデータの読み込み")
         kpi_url = KPI_DATA_BASE_URL.format(year=year, month=month)
-        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ")
         if kpi_df is None: return
 
@@ -357,9 +363,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             return
             
         # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用 
-        #st.subheader("ルームIDとアカウントIDの紐づけと管理対象判定リストの作成")
         st.markdown(f"##### ルームIDとアカウントIDの紐づけと管理対象判定リストの作成")
-        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
         if room_list_df is None: return
 
@@ -382,11 +386,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             room_list_ids = set()
 
             
-        # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room.csv)
-        #st.subheader("ルーム売上分配額データの読み込みとMKランク決定")
+        # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room_YYYYMM.csv)
         st.markdown(f"##### ルーム売上分配額データの読み込みとMKランク決定")
-        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
-        sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None)
+        # 【修正箇所】動的なURLを生成
+        sales_url = SALES_DATA_BASE_URL.format(year=year, month=month)
+        sales_df = load_data(sales_url, "売上分配額データ", header=None)
         if sales_df is None: return
         
         # 全体分配額合計の取得（1列目1行目）
@@ -424,11 +428,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         st.success(f"個別売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
         
         
-        # 2.5. プレミアムライブ分配額データの読み込み (paid_live_hist_invoice_format.csv)
-        #st.subheader("プレミアムライブ分配額データの読み込み")
+        # 2.5. プレミアムライブ分配額データの読み込み (paid_live_hist_invoice_format_YYYYMM.csv)
         st.markdown(f"##### プレミアムライブ分配額データの読み込み")
-        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
-        paid_live_df = load_data(PAID_LIVE_URL, "プレミアムライブ分配額データ", header=None)
+        # 【修正箇所】動的なURLを生成
+        paid_live_url = PAID_LIVE_BASE_URL.format(year=year, month=month)
+        paid_live_df = load_data(paid_live_url, "プレミアムライブ分配額データ", header=None)
         
         room_id_to_paid_live_map = {}
         if paid_live_df is not None and paid_live_df.shape[1] >= 2:
@@ -444,11 +448,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                     room_id_to_paid_live_map[room_id] = account_id_to_paid_live_map[account_id]
         st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
         
-        # 2.6. タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format.csv)
-        #st.subheader("タイムチャージ分配額データの読み込み")
+        # 2.6. タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format_YYYYMM.csv)
         st.markdown(f"##### タイムチャージ分配額データの読み込み")
-        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
-        time_charge_df = load_data(TIME_CHARGE_URL, "タイムチャージ分配額データ", header=None)
+        # 【修正箇所】動的なURLを生成
+        time_charge_url = TIME_CHARGE_BASE_URL.format(year=year, month=month)
+        time_charge_df = load_data(time_charge_url, "タイムチャージ分配額データ", header=None)
         
         room_id_to_time_charge_map = {}
         if time_charge_df is not None and time_charge_df.shape[1] >= 2:
@@ -466,7 +470,6 @@ def process_data(year, month, delivery_month_str, payment_month_str):
 
         
         # 3. 配信有無と売上分配額の突き合わせと結果生成
-        #st.header("3. 結果生成")
         st.markdown("#### 3. 結果生成")
         
         results = []
@@ -529,26 +532,20 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         final_columns = [col for col in column_order if col in results_df.columns]
         results_df = results_df[final_columns]
 
-        # --- 【修正 1/2】Excelの日付自動変換対策（="2025/10" を含むデータ）を results_df に適用 ---
-        # CSVダウンロード用データはExcel対策を維持
+        # Excelの日付自動変換対策（="2025/10" を含むデータ）を results_df に適用
         results_df_csv = results_df.copy()
         results_df_csv["配信月"] = results_df_csv["配信月"].astype(str).apply(lambda x: f'="{x}"')
         results_df_csv["支払月"] = results_df_csv["支払月"].astype(str).apply(lambda x: f'="{x}"')
 
-        # --- 【修正 2/2】画面表示用データを作成し、Excel対策表記を解除 ---
+        # 画面表示用データを作成し、Excel対策表記を解除
         display_df = results_df.copy()
-        # 画面表示用のデータをExcel対策表記から解除
-        # （例: "2025/10" が含まれているため、そのままの文字列として利用）
         
     st.success("✅ 全てのデータ処理が完了しました！")
 
     # 4. 結果の表示とCSVダウンロード
-    #st.header("4. 結果リスト")
     st.markdown("#### 4. 結果リスト")
     
     # 画面表示用のヘッダーを「ライバー愛称」に変更
-    # NOTE: DataFrameの表示時にも列名を変更する
-    # 【変更点】display_df を使用
     display_df = display_df.rename(columns={
         "ルーム名": "ライバー愛称",
         "R分配額": "R分配額",
@@ -561,11 +558,9 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     # st.dataframeに hide_index=True を追加してインデックスを非表示にする
     st.dataframe(display_df, use_container_width=True, hide_index=True) 
     
-    #st.subheader("CSVダウンロード")
     st.markdown(f"##### CSVダウンロード")
 
     # CSV出力はBOM付きUTF-8（Excel対応）
-    # 【変更点】results_df_csv を使用
     csv_bytes = results_df_csv.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
     st.download_button(
@@ -576,7 +571,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     )
 
     
-    #st.markdown("---")
+    st.markdown("---")
 
 
 if __name__ == "__main__":
