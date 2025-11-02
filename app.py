@@ -14,6 +14,8 @@ KPI_DATA_BASE_URL = "https://mksoul-pro.com/showroom/csv/{year}-{month:02d}_all_
 LIVER_LIST_URL = "https://mksoul-pro.com/showroom/file/m-liver-list.csv"
 ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
 SALES_DATA_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_with_mixed_rate_csv_donwload_for_room.csv"
+# プレミアムライブ分配額データURL
+PAID_LIVE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/paid_live_hist_invoice_format.csv"
 
 
 ## データの準備・読み込み関数
@@ -114,7 +116,7 @@ def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
 
     try:
         individual_revenue = float(individual_revenue)
-        # 個別ランクに応じた基本レートの辞書
+        # 個別ランクに応じた基本レートの辞書 (mk_rank 1, 3, 5, 7, 9, 11 のキーを使用)
         rank_rates = {
             'D': {1: 0.750, 3: 0.755, 5: 0.760, 7: 0.765, 9: 0.770, 11: 0.775},
             'E': {1: 0.725, 3: 0.730, 5: 0.735, 7: 0.740, 9: 0.745, 11: 0.750},
@@ -148,7 +150,7 @@ def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
         if rate is None:
             return "#ERROR_RANK"
 
-        # 計算式の適用 (元のPHPロジック通り)
+        # 計算式の適用
         payment_estimate = (individual_revenue * 1.08 * rate) / 1.10 * 1.10
         
         # 結果を小数点以下を四捨五入して整数に丸める
@@ -246,7 +248,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             account_id_to_room_id_map = {}
             
         # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room.csv)
-        st.subheader("ルーム売上分配額データの読み込み")
+        st.subheader("ルーム売上分配額データの読み込みとMKランク決定")
         sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None)
         if sales_df is None: return
         
@@ -254,7 +256,6 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         total_revenue = 0.0
         try:
             if sales_df.shape[0] > 0 and sales_df.shape[1] > 0:
-                # 1行目 (index 0), 1列目 (index 0) のデータを取得
                 total_revenue = float(sales_df.iloc[0, 0])
                 st.success(f"全体分配額合計（MKランク決定用）: **{round(total_revenue)}** 円")
             else:
@@ -267,22 +268,45 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         st.info(f"計算されたMKランク: **{mk_rank}**")
         
         # 個別ルームの分配額マッピングの作成
+        room_id_to_sales_map = {}
         if sales_df.shape[1] >= 2:
             sales_keys = sales_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
             sales_values = sales_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
             
             # 1行目の全体分配額合計を除く
+            # sales_values[1:].values と sales_keys[1:] で1行目をスキップ
             account_id_to_sales_map = pd.Series(sales_values[1:].values, index=sales_keys[1:]).to_dict()
             st.success(f"個別売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
+            
+            # ルームIDに紐づける
+            for account_id, room_id in account_id_to_room_id_map.items():
+                if account_id in account_id_to_sales_map:
+                    room_id_to_sales_map[room_id] = account_id_to_sales_map[account_id]
         else:
             st.error("売上分配額CSVに分配額（1列目）またはアカウントID（2列目）が見つかりません。")
             account_id_to_sales_map = {}
+        
+        
+        # 2.5. プレミアムライブ分配額データの読み込み (paid_live_hist_invoice_format.csv)
+        st.subheader("プレミアムライブ分配額データの読み込み")
+        paid_live_df = load_data(PAID_LIVE_URL, "プレミアムライブ分配額データ", header=None)
+        
+        room_id_to_paid_live_map = {}
+        if paid_live_df is not None and paid_live_df.shape[1] >= 2:
+            paid_live_keys = paid_live_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
+            paid_live_values = paid_live_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
             
-        # 2.5. ルームIDに対する最終分配額マッピングを作成
-        room_id_to_sales_map = {}
-        for account_id, room_id in account_id_to_room_id_map.items():
-            if account_id in account_id_to_sales_map:
-                room_id_to_sales_map[room_id] = account_id_to_sales_map[account_id]
+            # 【修正点】1行目（全体合計）をスキップしない (paid_live_values.values, paid_live_keys)
+            account_id_to_paid_live_map = pd.Series(paid_live_values.values, index=paid_live_keys).to_dict()
+            st.success(f"プレミアムライブ分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_paid_live_map)}**")
+
+            # ルームIDに対する最終分配額マッピングを作成
+            for account_id, room_id in account_id_to_room_id_map.items():
+                if account_id in account_id_to_paid_live_map:
+                    room_id_to_paid_live_map[room_id] = account_id_to_paid_live_map[account_id]
+        else:
+            st.error("プレミアムライブ分配額CSVの読み込みまたは構成に問題があります。")
+        
         
         # 3. 配信有無と売上分配額の突き合わせと結果生成
         st.header("3. 結果生成")
@@ -297,8 +321,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             # 個別ランクの判定
             individual_rank = get_individual_rank(sales_amount)
             
-            # 【新規】ルーム売上支払想定額の計算
+            # ルーム売上支払想定額の計算
             payment_estimate = calculate_payment_estimate(individual_rank, mk_rank, sales_amount)
+            
+            # プレミアムライブ分配額の取得。データがない場合はブランク ("") を設定。
+            paid_live_amount = room_id_to_paid_live_map.get(room_id, "")
                 
             results.append({
                 "ルームID": room_id,
@@ -308,7 +335,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                 "支払月": payment_month_str,
                 "ルーム売上分配額": sales_amount, 
                 "個別ランク": individual_rank,
-                "ルーム売上支払想定額": payment_estimate, # 【新規】想定額を追加
+                "ルーム売上支払想定額": payment_estimate, 
+                "プレミアムライブ分配額": paid_live_amount, 
             })
 
         results_df = pd.DataFrame(results)
@@ -322,7 +350,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             "支払月",
             "ルーム売上分配額", 
             "個別ランク", 
-            "ルーム売上支払想定額", # 確定
+            "ルーム売上支払想定額", 
+            "プレミアムライブ分配額", # 確定
             # 今後ここに新しい項目を追加していく
         ]
         
