@@ -226,7 +226,8 @@ def main():
     st.markdown("<p style='text-align: left;'>⚠️ <b>注意</b>: このツールは、<b>Secretsに設定されたCookieが有効な間のみ</b>動作します。</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    st.header("1. 処理月の選択と実行")
+    #st.header("1. 処理月の選択と実行")
+    st.markdown("#### 1. 処理月の選択と実行")
     
     month_options = get_processed_months()
     display_options = [opt[0] for opt in month_options]
