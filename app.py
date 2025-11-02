@@ -23,7 +23,7 @@ TIME_CHARGE_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/show_rank_tim
 
 
 ## データの準備・読み込み関数
-@st.cache_data
+# 【削除】: @st.cache_data を削除しました。これにより、URLが変わらない場合でも毎回データを再取得します。
 def load_data(url, name="データ", header='infer'):
     """URLからCSVを読み込み、DataFrameとして返す（文字化け対策のためUTF-8, Shift-JISを試行）"""
     try:
@@ -42,7 +42,7 @@ def load_data(url, name="データ", header='infer'):
         st.error(f"{name}の読み込みに失敗しました: {url}\nエラー: {e}")
         return None
 
-@st.cache_data
+# 【削除】: @st.cache_data を削除しました。これにより、アプリケーションが再実行されるたびに月リストが再生成されます。
 def get_processed_months():
     """プルダウンに表示する処理月リストを生成する"""
     today = datetime.date.today()
@@ -229,6 +229,7 @@ def main():
     #st.header("1. 処理月の選択と実行")
     st.markdown("#### 1. 処理月の選択と実行")
     
+    # get_processed_monthsからキャッシュデコレータを削除したため、毎回最新のリストを取得
     month_options = get_processed_months()
     display_options = [opt[0] for opt in month_options]
     value_options = [opt[1] for opt in month_options]
@@ -255,6 +256,7 @@ def main():
     
     st.markdown("---")
     if st.button("🚀 データ処理を開始する", type="primary"):
+        # ボタンを押すたびに、process_data内からload_dataが実行され、常に最新データが取得されます。
         process_data(year, month, delivery_month_str, payment_month_str)
     else:
         st.info(f"選択された配信月: **{selected_display_month}**。処理を開始するには上記のボタンを押してください。")
@@ -271,6 +273,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         # 2.1. 管理ライバーリストの読み込み (m-liver-list.csv)
         #st.subheader("管理ライバーリストの読み込みと愛称マッピングの作成")
         st.markdown(f"##### 管理ライバーリストの読み込みと愛称マッピングの作成")
+        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
         if liver_df is None: return
         
@@ -288,6 +291,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         #st.subheader(f"{year}年{month:02d}月分のKPIデータの読み込み")
         st.markdown(f"##### {year}年{month:02d}月分のKPIデータの読み込み")
         kpi_url = KPI_DATA_BASE_URL.format(year=year, month=month)
+        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ")
         if kpi_df is None: return
 
@@ -302,6 +306,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         # **【新規追加・修正】** 管理対象判定のためにも使用
         #st.subheader("ルームIDとアカウントIDの紐づけ")
         st.markdown(f"##### ルームIDとアカウントIDの紐づけと管理対象判定リストの作成")
+        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
         if room_list_df is None: return
 
@@ -327,6 +332,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         # 2.4. ルーム売上分配額データの読み込み (point_hist_with_mixed_rate_csv_donwload_for_room.csv)
         #st.subheader("ルーム売上分配額データの読み込みとMKランク決定")
         st.markdown(f"##### ルーム売上分配額データの読み込みとMKランク決定")
+        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None)
         if sales_df is None: return
         
@@ -368,6 +374,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         # 2.5. プレミアムライブ分配額データの読み込み (paid_live_hist_invoice_format.csv)
         #st.subheader("プレミアムライブ分配額データの読み込み")
         st.markdown(f"##### プレミアムライブ分配額データの読み込み")
+        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         paid_live_df = load_data(PAID_LIVE_URL, "プレミアムライブ分配額データ", header=None)
         
         room_id_to_paid_live_map = {}
@@ -387,6 +394,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         # 2.6. タイムチャージ分配額データの読み込み (show_rank_time_charge_hist_invoice_format.csv)
         #st.subheader("タイムチャージ分配額データの読み込み")
         st.markdown(f"##### タイムチャージ分配額データの読み込み")
+        # load_dataからキャッシュデコレータを削除したため、毎回最新のCSVを取得
         time_charge_df = load_data(TIME_CHARGE_URL, "タイムチャージ分配額データ", header=None)
         
         room_id_to_time_charge_map = {}
