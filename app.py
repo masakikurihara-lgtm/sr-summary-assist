@@ -52,14 +52,12 @@ def main():
     display_options = [opt[0] for opt in month_options]
     value_options = [opt[1] for opt in month_options]
     
-    # プルダウンのみをシンプルに表示
     selected_display_month = st.selectbox(
         "処理する**配信月**を選択してください:",
         options=display_options,
         index=0
     )
     
-    # 選択月情報の計算（データ処理のために内部で保持）
     try:
         selected_index = display_options.index(selected_display_month)
         selected_value_month = value_options[selected_index]
@@ -74,7 +72,6 @@ def main():
         st.warning("有効な処理月が選択されていません。")
         return
     
-    # 処理開始ボタン
     st.markdown("---")
     if st.button("🚀 データ処理を開始する", type="primary"):
         process_data(year, month, delivery_month_str, payment_month_str)
@@ -95,7 +92,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         liver_df = load_data(LIVER_LIST_URL, "管理ライバーリスト")
         if liver_df is None: return
         
-        # ✅ 1列目 (.iloc[:, 0]) のルームIDを取得し、文字列に変換
+        # 1列目 (.iloc[:, 0]) のルームIDを取得し、文字列に変換
         if liver_df.shape[1] > 0:
             liver_ids = liver_df.iloc[:, 0].astype(str).str.strip().tolist()
             st.success(f"管理ライバーのルームIDリスト（1列目）を読み込みました。件数: **{len(liver_ids)}**")
@@ -108,7 +105,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト")
         if room_list_df is None: return
         
-        # ✅ 1列目ID（キー）と2列目ルーム名（値）でマッピング
+        # === 最終確定：1列目ID（キー）と2列目ルーム名（値）でマッピング ===
         if room_list_df.shape[1] >= 2:
             
             # 1列目 (ID) を文字列に変換し、インデックスとして設定
@@ -116,8 +113,9 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             
             # 2列目 (ルーム名) のデータを値として取得
             # 1列目をキー(ID)、2列目(インデックス1)を値(ルーム名)として辞書を作成
+            # 他の列を一切参照せず、2列目の値をそのまま使用します。
             room_name_map = room_list_df.set_index(room_list_df.columns[0]).iloc[:, 1].astype(str).str.strip().to_dict()
-            st.success(f"ルーム名マッピングを作成しました。マッピング件数: **{len(room_name_map)}** (**2列目のルーム名を使用**)")
+            st.success(f"ルーム名マッピングを作成しました。マッピング件数: **{len(room_name_map)}** (**2列目のルーム名のみを使用**)")
         else:
             st.error("ルーム名リストCSVに必要な列（1列目:ID, 2列目:ルーム名）が見つかりません。処理を中断します。")
             return
@@ -128,7 +126,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         kpi_df = load_data(kpi_url, f"{year}年{month:02d}月分のKPIデータ")
         if kpi_df is None: return
 
-        # ✅ 2列目（ルームID）のデータを取得し、Setに変換
+        # 2列目（ルームID）のデータを取得し、Setに変換
         if kpi_df.shape[1] > 1:
             kpi_room_ids = set(kpi_df.iloc[:, 1].astype(str).str.strip().tolist())
             st.success(f"配信があったルーム件数: **{len(kpi_room_ids)}** (KPIデータは2列目のIDを使用)")
@@ -175,7 +173,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     )
     
     st.markdown("---")
-    st.info("💡 **次のステップについて**\n\nこの修正で、ルーム名（2列目）の紐づけが正しく行われているはずです。確認後、次は**売上データ**を取り込み、残りの目標項目を完成させましょう。")
+    st.info("💡 **次のステップについて**\n\nこの修正で、ルーム名（2列目）の紐づけが正しく行われていることをご確認ください。次は**売上データ**を取り込み、残りの目標項目を完成させましょう。")
 
 
 if __name__ == "__main__":
