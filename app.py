@@ -500,7 +500,9 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         "PL支払想定額": "PL支払想定額",
         "TC支払想定額": "TC支払想定額"
     })
-    st.dataframe(display_df, use_container_width=True) 
+    
+    # **【修正箇所】** st.dataframeに hide_index=True を追加してインデックスを非表示にする
+    st.dataframe(display_df, use_container_width=True, hide_index=True) 
     
     #st.subheader("CSVダウンロード")
     st.markdown(f"##### CSVダウンロード")
