@@ -4,8 +4,6 @@ from io import StringIO
 import datetime
 from dateutil.relativedelta import relativedelta
 
-# エラーの原因となっていた以下の行は削除しました
-# from streamlit_autorefresh import st_autorefresh
 
 
 # --- ページ設定 ---
@@ -449,17 +447,17 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     st.dataframe(display_df, use_container_width=True) 
     
     st.subheader("CSVダウンロード")
-    
-    # CSV出力はBOM付きUTF-8 (encoding='utf-8-sig') を使用
-    # これがCSVの文字化け対策です
-    csv = results_df.to_csv(index=False, encoding='utf-8-sig') 
-    
+
+    # CSV出力はBOM付きUTF-8（Excel対応）
+    csv_bytes = results_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+
     st.download_button(
         label="📥 結果をCSVダウンロード",
-        data=csv,
+        data=csv_bytes,
         file_name=f'showroom_liver_sales_estimate_{year}{month:02d}.csv',
         mime='text/csv',
     )
+
     
     st.markdown("---")
 
