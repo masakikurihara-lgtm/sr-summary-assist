@@ -52,10 +52,8 @@ def get_individual_rank(sales_amount_str):
         return "#N/A"
     
     try:
-        # 分配額を数値に変換
         amount = float(sales_amount_str)
         
-        # 判定マトリクスに基づきランクを決定（閾値の高い順）
         if amount >= 900001:
             return "SSS"
         elif amount >= 450001:
@@ -73,12 +71,92 @@ def get_individual_rank(sales_amount_str):
         elif amount >= 0:
             return "E"
         else:
-            # マイナスの値など予期せぬ場合
             return "E" 
             
     except ValueError:
-        # 数値変換エラー（データの破損など）
         return "#ERROR"
+
+# --- MKランク判定関数 ---
+def get_mk_rank(revenue):
+    """
+    全体分配額合計からMKランク（1〜11）を判定する
+    """
+    if revenue <= 175000:
+        return 1
+    elif revenue <= 350000:
+        return 2
+    elif revenue <= 525000:
+        return 3
+    elif revenue <= 700000:
+        return 4
+    elif revenue <= 875000:
+        return 5
+    elif revenue <= 1050000:
+        return 6
+    elif revenue <= 1225000:
+        return 7
+    elif revenue <= 1400000:
+        return 8
+    elif revenue <= 1575000:
+        return 9
+    elif revenue <= 1750000:
+        return 10
+    else:
+        return 11
+        
+# --- 支払想定額計算関数 ---
+def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
+    """
+    個別ランク、MKランク、個別分配額から支払想定額を計算する
+    """
+    if individual_revenue == "#N/A" or individual_rank == "#N/A":
+        return "#N/A"
+
+    try:
+        individual_revenue = float(individual_revenue)
+        # 個別ランクに応じた基本レートの辞書
+        rank_rates = {
+            'D': {1: 0.750, 3: 0.755, 5: 0.760, 7: 0.765, 9: 0.770, 11: 0.775},
+            'E': {1: 0.725, 3: 0.730, 5: 0.735, 7: 0.740, 9: 0.745, 11: 0.750},
+            'C': {1: 0.775, 3: 0.780, 5: 0.785, 7: 0.790, 9: 0.795, 11: 0.800},
+            'B': {1: 0.800, 3: 0.805, 5: 0.810, 7: 0.815, 9: 0.820, 11: 0.825},
+            'A': {1: 0.825, 3: 0.830, 5: 0.835, 7: 0.840, 9: 0.845, 11: 0.850},
+            'S': {1: 0.850, 3: 0.855, 5: 0.860, 7: 0.865, 9: 0.870, 11: 0.875},
+            'SS': {1: 0.875, 3: 0.880, 5: 0.885, 7: 0.890, 9: 0.895, 11: 0.900},
+            'SSS': {1: 0.900, 3: 0.905, 5: 0.910, 7: 0.915, 9: 0.920, 11: 0.925},
+        }
+
+        # MKランクに応じてキーを決定 (1,2 -> 1, 3,4 -> 3, ...)
+        if mk_rank in [1, 2]:
+            key = 1
+        elif mk_rank in [3, 4]:
+            key = 3
+        elif mk_rank in [5, 6]:
+            key = 5
+        elif mk_rank in [7, 8]:
+            key = 7
+        elif mk_rank in [9, 10]:
+            key = 9
+        elif mk_rank == 11:
+            key = 11
+        else:
+            return "#ERROR_MK"
+
+        # 適用レートの取得
+        rate = rank_rates.get(individual_rank, {}).get(key)
+        
+        if rate is None:
+            return "#ERROR_RANK"
+
+        # 計算式の適用 (元のPHPロジック通り)
+        payment_estimate = (individual_revenue * 1.08 * rate) / 1.10 * 1.10
+        
+        # 結果を小数点以下を四捨五入して整数に丸める
+        return str(round(payment_estimate)) 
+
+    except Exception:
+        return "#ERROR_CALC"
+
 
 ## メインアプリケーション
 def main():
@@ -172,12 +250,30 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         sales_df = load_data(SALES_DATA_URL, "売上分配額データ", header=None)
         if sales_df is None: return
         
+        # 全体分配額合計の取得（1列目1行目）
+        total_revenue = 0.0
+        try:
+            if sales_df.shape[0] > 0 and sales_df.shape[1] > 0:
+                # 1行目 (index 0), 1列目 (index 0) のデータを取得
+                total_revenue = float(sales_df.iloc[0, 0])
+                st.success(f"全体分配額合計（MKランク決定用）: **{round(total_revenue)}** 円")
+            else:
+                st.warning("売上分配額CSVが空のため、全体分配額合計は0として処理します。")
+        except:
+            st.error("売上分配額CSVの1列目1行目から全体分配額合計の取得に失敗しました。0として処理します。")
+            
+        # MKランクの決定
+        mk_rank = get_mk_rank(total_revenue)
+        st.info(f"計算されたMKランク: **{mk_rank}**")
+        
+        # 個別ルームの分配額マッピングの作成
         if sales_df.shape[1] >= 2:
             sales_keys = sales_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
             sales_values = sales_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
             
-            account_id_to_sales_map = pd.Series(sales_values.values, index=sales_keys).to_dict()
-            st.success(f"売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
+            # 1行目の全体分配額合計を除く
+            account_id_to_sales_map = pd.Series(sales_values[1:].values, index=sales_keys[1:]).to_dict()
+            st.success(f"個別売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
         else:
             st.error("売上分配額CSVに分配額（1列目）またはアカウントID（2列目）が見つかりません。")
             account_id_to_sales_map = {}
@@ -198,8 +294,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
             sales_amount = room_id_to_sales_map.get(room_id, "#N/A")
             
-            # 【新規】個別ランクの判定
+            # 個別ランクの判定
             individual_rank = get_individual_rank(sales_amount)
+            
+            # 【新規】ルーム売上支払想定額の計算
+            payment_estimate = calculate_payment_estimate(individual_rank, mk_rank, sales_amount)
                 
             results.append({
                 "ルームID": room_id,
@@ -208,7 +307,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                 "配信月": delivery_month_str,
                 "支払月": payment_month_str,
                 "ルーム売上分配額": sales_amount, 
-                "個別ランク": individual_rank, # 【新規】個別ランクを追加
+                "個別ランク": individual_rank,
+                "ルーム売上支払想定額": payment_estimate, # 【新規】想定額を追加
             })
 
         results_df = pd.DataFrame(results)
@@ -221,7 +321,8 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             "配信月",
             "支払月",
             "ルーム売上分配額", 
-            "個別ランク", # 確定
+            "個別ランク", 
+            "ルーム売上支払想定額", # 確定
             # 今後ここに新しい項目を追加していく
         ]
         
@@ -246,7 +347,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     st.download_button(
         label="📥 結果をCSVダウンロード",
         data=csv,
-        file_name=f'showroom_liver_stream_sales_rank_check_{year}{month:02d}.csv',
+        file_name=f'showroom_liver_sales_estimate_{year}{month:02d}.csv',
         mime='text/csv',
     )
     
