@@ -13,7 +13,6 @@ st.set_page_config(layout="wide", page_title="SHOWROOMライバーデータ整�
 KPI_DATA_BASE_URL = "https://mksoul-pro.com/showroom/csv/{year}-{month:02d}_all_all.csv"
 LIVER_LIST_URL = "https://mksoul-pro.com/showroom/file/m-liver-list.csv"
 ROOM_LIST_URL = "https://mksoul-pro.com/showroom/file/room_list.csv"
-# ルーム売上分配額データURL
 SALES_DATA_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_with_mixed_rate_csv_donwload_for_room.csv"
 
 
@@ -22,7 +21,6 @@ SALES_DATA_URL = "https://mksoul-pro.com/showroom/sales-app_v2/db/point_hist_wit
 def load_data(url, name="データ", header='infer'):
     """URLからCSVを読み込み、DataFrameとして返す"""
     try:
-        # header='infer'でヘッダーあり、header=Noneでヘッダーなし
         df = pd.read_csv(url, header=header) 
         return df
     except Exception as e:
@@ -119,14 +117,22 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             
         # 2.3. ルームリストの読み込み (room_list.csv) - IDとアカウントIDの紐づけ用
         st.subheader("ルームIDとアカウントIDの紐づけ")
+        # room_list.csv はヘッダーありで読み込み
         room_list_df = load_data(ROOM_LIST_URL, "ルーム名リスト", header='infer')
         if room_list_df is None: return
 
         # 1列目 (ルームID) と 4列目 (アカウントID) のマッピングを作成
         if room_list_df.shape[1] >= 4:
+            # === 修正箇所 ===
+            # アカウントID (4列目: index 3) のデータをキーとする Series を作成
+            keys_series = room_list_df.iloc[:, 3].astype(str).str.strip()
+            
+            # ルームID (1列目: index 0) のデータを値として使用
+            values_series = room_list_df.iloc[:, 0].astype(str).str.strip()
+            
             # アカウントIDをキー、ルームIDを値とする辞書を作成
-            # 1列目 (ID) を値、4列目 (アカウントID) をキー
-            account_id_to_room_id_map = room_list_df.set_index(room_list_df.columns[3].astype(str).str.strip()).iloc[:, 0].astype(str).str.strip().to_dict()
+            account_id_to_room_id_map = pd.Series(values_series.values, index=keys_series).to_dict()
+            # =================
             st.success("ルームIDとアカウントIDのマッピングを作成しました。")
         else:
             st.error("ルーム名リストCSVにアカウントID（4列目）が見つかりません。売上分配額の紐づけをスキップします。")
@@ -140,12 +146,11 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         
         # 1列目 (分配額) と 2列目 (アカウントID) を使用
         if sales_df.shape[1] >= 2:
-            # アカウントIDをキー、分配額を値とする辞書を作成
-            # 1列目 (分配額) を値、2列目 (アカウントID) をキー
-            sales_df.iloc[:, 1] = sales_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
-            sales_df.iloc[:, 0] = sales_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
+            # アカウントIDをキー（2列目: index 1）、分配額を値（1列目: index 0）とする辞書を作成
+            sales_keys = sales_df.iloc[:, 1].astype(str).str.strip() # アカウントID (キー)
+            sales_values = sales_df.iloc[:, 0].astype(str).str.strip() # 分配額 (値)
             
-            account_id_to_sales_map = sales_df.set_index(sales_df.columns[1]).iloc[:, 0].to_dict()
+            account_id_to_sales_map = pd.Series(sales_values.values, index=sales_keys).to_dict()
             st.success(f"売上分配額データ（アカウントIDをキー）を読み込みました。件数: **{len(account_id_to_sales_map)}**")
         else:
             st.error("売上分配額CSVに分配額（1列目）またはアカウントID（2列目）が見つかりません。")
