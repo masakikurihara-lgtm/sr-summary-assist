@@ -42,6 +42,44 @@ def get_processed_months():
             
     return processed_months
 
+
+# --- 個別ランク判定関数 ---
+def get_individual_rank(sales_amount_str):
+    """
+    ルーム売上分配額（文字列）から個別ランクを判定する
+    """
+    if sales_amount_str == "#N/A":
+        return "#N/A"
+    
+    try:
+        # 分配額を数値に変換
+        amount = float(sales_amount_str)
+        
+        # 判定マトリクスに基づきランクを決定（閾値の高い順）
+        if amount >= 900001:
+            return "SSS"
+        elif amount >= 450001:
+            return "SS"
+        elif amount >= 270001:
+            return "S"
+        elif amount >= 135001:
+            return "A"
+        elif amount >= 90001:
+            return "B"
+        elif amount >= 45001:
+            return "C"
+        elif amount >= 22501:
+            return "D"
+        elif amount >= 0:
+            return "E"
+        else:
+            # マイナスの値など予期せぬ場合
+            return "E" 
+            
+    except ValueError:
+        # 数値変換エラー（データの破損など）
+        return "#ERROR"
+
 ## メインアプリケーション
 def main():
     st.title("🎤 SHOWROOMライバーデータ整理ツール (配信有無 & 売上チェック)")
@@ -121,9 +159,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
         if room_list_df is None: return
 
         if room_list_df.shape[1] >= 4:
-            # アカウントID (4列目: index 3) のデータをキーとする Series を作成
             keys_series = room_list_df.iloc[:, 3].astype(str).str.strip()
-            # ルームID (1列目: index 0) のデータを値として使用
             values_series = room_list_df.iloc[:, 0].astype(str).str.strip()
             account_id_to_room_id_map = pd.Series(values_series.values, index=keys_series).to_dict()
             st.success("ルームIDとアカウントIDのマッピングを作成しました。")
@@ -161,30 +197,34 @@ def process_data(year, month, delivery_month_str, payment_month_str):
             liver_alias = liver_alias_map.get(room_id, "愛称不明") 
             has_stream = "有り" if room_id in kpi_room_ids else "なし"
             sales_amount = room_id_to_sales_map.get(room_id, "#N/A")
+            
+            # 【新規】個別ランクの判定
+            individual_rank = get_individual_rank(sales_amount)
                 
             results.append({
                 "ルームID": room_id,
-                "ルーム名": liver_alias, # ライバー愛称を表示
+                "ルーム名": liver_alias, 
                 "配信有無": has_stream,
                 "配信月": delivery_month_str,
                 "支払月": payment_month_str,
-                "ルーム売上分配額": sales_amount, # 【修正点】常に右端に追加されるように、リストの末尾に配置
+                "ルーム売上分配額": sales_amount, 
+                "個別ランク": individual_rank, # 【新規】個別ランクを追加
             })
 
         results_df = pd.DataFrame(results)
 
-        # 【修正点】結果の列順序を明示的に指定し、新しい項目が常に右端に来るようにする
+        # 結果の列順序を明示的に指定（新しい項目は常に右端に追加）
         column_order = [
             "ルームID",
             "ルーム名",
             "配信有無",
             "配信月",
             "支払月",
-            "ルーム売上分配額", # 確定
+            "ルーム売上分配額", 
+            "個別ランク", # 確定
             # 今後ここに新しい項目を追加していく
         ]
         
-        # 実際に存在する列のみを抽出（今後の項目のため）
         final_columns = [col for col in column_order if col in results_df.columns]
         results_df = results_df[final_columns]
 
@@ -206,7 +246,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     st.download_button(
         label="📥 結果をCSVダウンロード",
         data=csv,
-        file_name=f'showroom_liver_stream_sales_check_{year}{month:02d}.csv',
+        file_name=f'showroom_liver_stream_sales_rank_check_{year}{month:02d}.csv',
         mime='text/csv',
     )
     
