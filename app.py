@@ -571,7 +571,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     )
 
     
-    st.markdown("---")
+    #st.markdown("---")
 
 
 if __name__ == "__main__":
