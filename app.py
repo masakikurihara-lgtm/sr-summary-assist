@@ -294,7 +294,6 @@ def main():
     check1 = st.checkbox(f"① 管理ライバーリスト（`{LIVER_LIST_URL.split('/')[-1]}`）が最新状態か", key='check1')
     check2 = st.checkbox(f"② ルームリスト（`{ROOM_LIST_URL.split('/')[-1]}`）が最新状態か", key='check2')
     
-    # チェック項目③のテキストから「分」を削除
     # KPIデータは `2025-10_all_all.csv` の形式で、選択された月がURLに含まれるため、ファイル名を表示。
     kpi_file_name = KPI_DATA_BASE_URL.format(year=year, month=month).split('/')[-1]
     check3 = st.checkbox(f"③ 処理月（{display_month_text}）のKPIデータ（`{kpi_file_name}`）が最新状態か", key='check3')
@@ -498,7 +497,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
                     
             results.append({
                 "ルームID": room_id,
-                "ルーム名": liver_alias,
+                "ルーム名": liver_alias, # <--- 一旦ここで「ルーム名」として定義
                 "管理対象": is_managed,
                 "配信有無": has_stream,
                 "配信月": delivery_month_str,
@@ -513,10 +512,13 @@ def process_data(year, month, delivery_month_str, payment_month_str):
 
         results_df = pd.DataFrame(results)
 
+        # 【修正箇所】CSVと画面表示で統一するため、「ルーム名」を「ライバー愛称」にここで変更
+        results_df = results_df.rename(columns={"ルーム名": "ライバー愛称"})
+
         # 結果の列順序を明示的に指定
         column_order = [
             "ルームID",
-            "ルーム名",
+            "ライバー愛称", # 修正: ルーム名 -> ライバー愛称
             "管理対象",
             "配信有無",
             "配信月",
@@ -545,15 +547,12 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     # 4. 結果の表示とCSVダウンロード
     st.markdown("#### 4. 結果リスト")
     
-    # 画面表示用のヘッダーを「ライバー愛称」に変更
-    display_df = display_df.rename(columns={
-        "ルーム名": "ライバー愛称",
-        "R分配額": "R分配額",
-        "R支払想定額": "R支払想定額",
-        "PL分配額": "PL分配額",
-        "PL支払想定額": "PL支払想定額",
-        "TC支払想定額": "TC支払想定額"
-    })
+    # 【修正箇所】列名変更がresults_dfに対して既に行われているため、ここでは不要な列名変更を削除し、
+    # 既存のロジック（分配額などの列名はそのまま維持）を残す
+    # display_dfはすでに「ライバー愛称」を持っている
+    # display_df = display_df.rename(columns={...}) ブロック全体を削除し、必要な列だけを明示的にリネームする
+    
+    # 画面表示用のヘッダーとして表示されるDataFrameには、すでに「ライバー愛称」が設定されている
     
     # st.dataframeに hide_index=True を追加してインデックスを非表示にする
     st.dataframe(display_df, use_container_width=True, hide_index=True) 
@@ -561,6 +560,7 @@ def process_data(year, month, delivery_month_str, payment_month_str):
     st.markdown(f"##### CSVダウンロード")
 
     # CSV出力はBOM付きUTF-8（Excel対応）
+    # results_df_csvはすでに「ライバー愛称」の列名を持っている
     csv_bytes = results_df_csv.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
     st.download_button(
