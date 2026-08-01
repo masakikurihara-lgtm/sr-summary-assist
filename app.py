@@ -177,7 +177,8 @@ def calculate_payment_estimate(individual_rank, mk_rank, individual_revenue):
             return "#ERROR_RANK"
 
         # 計算式の適用: ($individualRevenue * 1.08 * $rate) / 1.10 * 1.10
-        payment_estimate = (individual_revenue * 1.08 * rate) / 1.10 * 1.10
+        # payment_estimate = (individual_revenue * 1.08 * rate) / 1.10 * 1.10
+        payment_estimate = (individual_revenue * 1.07 * rate) / 1.10 * 1.10
         
         # 結果を小数点以下を四捨五入して整数に丸める
         return str(round(payment_estimate)) 
@@ -199,7 +200,8 @@ def calculate_paid_live_payment_estimate(paid_live_amount_str):
         individual_revenue = float(paid_live_amount_str)
         
         # 計算式の適用: ($individualRevenue * 1.00 * 1.08 * 0.9) / 1.10 * 1.10
-        payment_estimate = (individual_revenue * 1.08 * 0.9) / 1.10 * 1.10
+        # payment_estimate = (individual_revenue * 1.08 * 0.9) / 1.10 * 1.10
+        payment_estimate = (individual_revenue * 1.07 * 0.9) / 1.10 * 1.10
         
         # 結果を小数点以下を四捨五入して整数に丸める
         return str(round(payment_estimate))
@@ -221,7 +223,8 @@ def calculate_time_charge_payment_estimate(time_charge_amount_str):
         individual_revenue = float(time_charge_amount_str)
         
         # 計算式の適用: ($individualRevenue * 1.08 * 1.00) / 1.10 * 1.10
-        payment_estimate = (individual_revenue * 1.08 * 1.00) / 1.10 * 1.10
+        # payment_estimate = (individual_revenue * 1.08 * 1.00) / 1.10 * 1.10
+        payment_estimate = (individual_revenue * 1.07 * 1.00) / 1.10 * 1.10
         
         # 結果を小数点以下を四捨五入して整数に丸める
         return str(round(payment_estimate))
