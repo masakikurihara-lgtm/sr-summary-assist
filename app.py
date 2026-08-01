@@ -240,6 +240,7 @@ def main():
         unsafe_allow_html=True
     )  
     st.markdown("<p style='text-align: left;'>⚠️ <b>注意</b>: このツールは、<b>Secretsに設定されたCookieが有効な間のみ</b>動作します。</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: left;'>⚠️ <b>注意</b>: インボイス制度経過措置第二フェーズ用に修正済み。（2026/07配信分対応後）</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     #st.header("1. 処理月の選択と実行")
